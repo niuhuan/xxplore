@@ -12,9 +12,9 @@ include $(DEVKITPRO)/libnx/switch_rules
 #---------------------------------------------------------------------------------
 TARGET		:=	$(notdir $(CURDIR))
 BUILD		:=	build
-SOURCES		:=	source source/ui source/fs source/i18n
+SOURCES		:=	source source/ui source/fs source/i18n source/install
 DATA		:=	data
-INCLUDES	:=	include include/ui include/fs include/i18n
+INCLUDES	:=	include include/ui include/fs include/i18n include/install include/util
 ROMFS	:=	romfs
 
 APP_TITLE	:=	Xplore
@@ -41,6 +41,7 @@ ASFLAGS	:=	-g $(ARCH)
 LDFLAGS	=	-specs=$(DEVKITPRO)/libnx/switch.specs -g $(ARCH) -Wl,-Map,$(notdir $*.map)
 
 LIBS	:=	-lSDL2_ttf -lSDL2_image -lSDL2_gfx -lpng -ljpeg -lwebp `sdl2-config --libs` `$(PREFIX)pkg-config --libs freetype2`
+LIBS	+=	-lzstd
 
 #---------------------------------------------------------------------------------
 # list of directories containing libraries, this must be the top level containing

@@ -5,6 +5,8 @@
 #include "swkbd_input.hpp"
 #include "ui/file_list.hpp"
 #include "ui/font_manager.hpp"
+#include "ui/image_viewer.hpp"
+#include "ui/installer_screen.hpp"
 #include "ui/main_menu.hpp"
 #include "ui/modals.hpp"
 #include "ui/renderer.hpp"
@@ -62,6 +64,11 @@ struct PanelAnim {
     }
     bool isAnimating() const { return progress < 1.0f; }
 };
+
+constexpr uint64_t kAppletImageFileLimit   = 1ULL * 1024ULL * 1024ULL;
+constexpr uint64_t kNormalImageFileLimit   = 10ULL * 1024ULL * 1024ULL;
+constexpr uint64_t kAppletImageDecodeLimit = 8ULL * 1024ULL * 1024ULL;
+constexpr uint64_t kNormalImageDecodeLimit = 96ULL * 1024ULL * 1024ULL;
 
 static std::vector<IconEntry> loadIcons(Renderer& renderer) {
     const char* names[] = {
@@ -175,6 +182,7 @@ int Application::run(int argc, char* argv[]) {
     padConfigureInput(1, HidNpadStyleSet_NpadStandard);
     PadState pad;
     padInitializeDefault(&pad);
+    const bool appletMode = appletGetAppletType() == AppletType_LibraryApplet;
 
     Renderer renderer;
     FontManager fontManager;
@@ -195,6 +203,9 @@ int Application::run(int argc, char* argv[]) {
     ModalChoice  modalChoice;
     ModalProgress modalProgress;
     ModalInfo modalInfo;
+    ModalInstallPrompt modalInstallPrompt;
+    ImageViewer imageViewer;
+    InstallerScreen installerScreen;
 
     PanelState leftPanel;
     PanelState rightPanel;
@@ -215,6 +226,7 @@ int Application::run(int argc, char* argv[]) {
     int                      savedDeleteCursor = 0;
 
     bool appQuit = false;
+    std::vector<InstallQueueItem> pendingInstallItems;
 
     auto activeRef = [&]() -> PanelState& {
         return activePanel == PANEL_LEFT ? leftPanel : rightPanel;
@@ -229,6 +241,133 @@ int Application::run(int argc, char* argv[]) {
             rightPanel.list.clearSelection();
             reloadPanel(rightPanel, icons, keepCursor);
         }
+    };
+
+    auto appTitle = [&]() -> const char* {
+        return appletMode ? "Xplore(Applet)" : "Xplore";
+    };
+
+    auto buildInstallItems = [&](PanelState& panel, bool useSelection) {
+        std::vector<InstallQueueItem> result;
+        const auto& items = panel.list.getItems();
+        auto addIndex = [&](int index) {
+            if (index < 0 || index >= static_cast<int>(items.size()))
+                return;
+            const ListItem& item = items[index];
+            if (item.label == ".." || item.action == ACTION_ENTER)
+                return;
+            std::string fullPath = fs::joinPath(panel.path, item.label);
+            if (!fs::isInstallPackagePath(fullPath))
+                return;
+
+            fs::FileStatInfo statInfo;
+            if (!fs::statPath(fullPath, statInfo) || statInfo.isDirectory)
+                return;
+
+            InstallQueueItem queueItem;
+            queueItem.path = fullPath;
+            queueItem.name = item.label;
+            queueItem.size = statInfo.size;
+            result.push_back(std::move(queueItem));
+        };
+
+        if (useSelection && panel.list.hasSelection()) {
+            for (int i = 0; i < static_cast<int>(items.size()); i++)
+                if (panel.list.isSelected(i))
+                    addIndex(i);
+        } else {
+            addIndex(panel.list.getCursor());
+        }
+        return result;
+    };
+
+    auto allSelectedInstallPackages = [&](PanelState& panel) -> bool {
+        if (!panel.list.hasSelection())
+            return false;
+
+        const auto& items = panel.list.getItems();
+        int selectedCount = 0;
+        for (int i = 0; i < static_cast<int>(items.size()); i++) {
+            if (!panel.list.isSelected(i))
+                continue;
+            selectedCount++;
+            if (items[i].label == ".." || items[i].action == ACTION_ENTER)
+                return false;
+            std::string fullPath = fs::joinPath(panel.path, items[i].label);
+            if (!fs::isInstallPackagePath(fullPath))
+                return false;
+        }
+        return selectedCount > 0;
+    };
+
+    auto openInstallPrompt = [&](std::vector<InstallQueueItem> items) {
+        if (items.empty())
+            return;
+        pendingInstallItems = std::move(items);
+
+        std::string body;
+        if (pendingInstallItems.size() == 1) {
+            body = i18n.t("installer.prompt_single");
+            body += " ";
+            body += pendingInstallItems.front().name;
+        } else {
+            body = i18n.t("installer.prompt_multi_prefix");
+            body += " ";
+            body += std::to_string(pendingInstallItems.size());
+            body += " ";
+            body += i18n.t("installer.prompt_multi_suffix");
+        }
+        modalInstallPrompt.open(i18n.t("installer.prompt_title"), body);
+    };
+
+    auto openImageFile = [&](const std::string& path) {
+        fs::FileStatInfo statInfo;
+        if (!fs::statPath(path, statInfo) || statInfo.isDirectory) {
+            toast.show(i18n.t("error.operation_failed"), "", ToastKind::Error, 2500);
+            return;
+        }
+
+        const uint64_t fileLimit   = appletMode ? kAppletImageFileLimit : kNormalImageFileLimit;
+        const uint64_t decodeLimit = appletMode ? kAppletImageDecodeLimit : kNormalImageDecodeLimit;
+        if (statInfo.size > fileLimit) {
+            toast.show(i18n.t("error.image_too_large"), "", ToastKind::Warning, 2500);
+            return;
+        }
+
+        fs::ImageInfo imageInfo;
+        std::string probeErr;
+        if (!fs::probeImageInfo(path, imageInfo, probeErr)) {
+            toast.show(i18n.t("error.image_load_failed"), probeErr.c_str(), ToastKind::Error, 3000);
+            return;
+        }
+
+        uint64_t decodedBytes =
+            static_cast<uint64_t>(imageInfo.width) * static_cast<uint64_t>(imageInfo.height) * 4ULL;
+        if (decodedBytes > decodeLimit) {
+            toast.show(i18n.t("error.image_too_large"), "", ToastKind::Warning, 2500);
+            return;
+        }
+
+        std::string err;
+        if (!imageViewer.open(renderer, path, err))
+            toast.show(i18n.t("error.image_load_failed"), err.c_str(), ToastKind::Error, 3000);
+    };
+
+    auto openFilePath = [&](PanelState& panel, const ListItem& item) {
+        if (item.label == "..")
+            return;
+
+        std::string fullPath = fs::joinPath(panel.path, item.label);
+        if (fs::isInstallPackagePath(fullPath)) {
+            openInstallPrompt(buildInstallItems(panel, false));
+            return;
+        }
+        if (fs::isImagePath(fullPath)) {
+            openImageFile(fullPath);
+            return;
+        }
+
+        toast.show(i18n.t("error.open_not_supported"), item.label.c_str(), ToastKind::Info, 2500);
     };
 
     auto fillMenuState = [&](MainMenuState& st) {
@@ -294,7 +433,7 @@ int Application::run(int argc, char* argv[]) {
         int rx      = lw;
         renderer.clear(theme::BG);
         renderer.drawRectFilled(0, 0, theme::SCREEN_W, theme::HEADER_H, theme::HEADER_BG);
-        fontManager.drawText(renderer.sdl(), "Xplore", theme::PADDING,
+        fontManager.drawText(renderer.sdl(), appTitle(), theme::PADDING,
                              (theme::HEADER_H - theme::FONT_SIZE_TITLE) / 2,
                              theme::FONT_SIZE_TITLE, theme::PRIMARY);
         renderer.drawRectFilled(0, theme::HEADER_H - 1, theme::SCREEN_W, 1, theme::DIVIDER);
@@ -340,15 +479,34 @@ int Application::run(int argc, char* argv[]) {
         FileList& activeList = active.list;
 
         bool modalBlocking =
-            modalConfirm.isOpen() || modalChoice.isOpen() || modalProgress.isOpen() || modalInfo.isOpen();
+            modalConfirm.isOpen() || modalChoice.isOpen() || modalProgress.isOpen() ||
+            modalInfo.isOpen() || modalInstallPrompt.isOpen() || imageViewer.isOpen() ||
+            installerScreen.isOpen();
         bool menuBlocking = mainMenu.isOpen();
 
         // Plus toggles menu
         if (kDown & HidNpadButton_Plus) {
-            if (mainMenu.isOpen())
+            if (installerScreen.isOpen() || imageViewer.isOpen()) {
+                // Reserved for screen-specific handling below.
+            } else if (mainMenu.isOpen())
                 mainMenu.close();
             else if (!modalBlocking)
                 mainMenu.open();
+        }
+
+        if (imageViewer.isOpen()) {
+            imageViewer.handleInput(kDown);
+        }
+
+        if (installerScreen.isOpen()) {
+            installerScreen.update();
+            InstallerAction action = installerScreen.handleInput(kDown);
+            if (action == InstallerAction::Close) {
+                installerScreen.close();
+                pendingInstallItems.clear();
+            } else if (action == InstallerAction::ExitApp) {
+                appQuit = true;
+            }
         }
 
         if (modalConfirm.isOpen()) {
@@ -438,6 +596,25 @@ int Application::run(int argc, char* argv[]) {
             if (modalInfo.handleInput(kDown) != ConfirmResult::None) modalInfo.close();
         }
 
+        if (modalInstallPrompt.isOpen()) {
+            InstallPromptResult result = modalInstallPrompt.handleInput(kDown);
+            if (result != InstallPromptResult::None) {
+                modalInstallPrompt.close();
+                if (result == InstallPromptResult::Install ||
+                    result == InstallPromptResult::InstallAndDelete) {
+                    installerScreen.open(
+                        pendingInstallItems,
+                        result == InstallPromptResult::InstallAndDelete
+                            ? InstallDeleteMode::DeleteAfterInstall
+                            : InstallDeleteMode::KeepFiles,
+                        appletMode);
+                    activeList.clearSelection();
+                } else {
+                    pendingInstallItems.clear();
+                }
+            }
+        }
+
         if (!modalBlocking && !menuBlocking) {
             if (!anim.isAnimating()) {
                 if ((kDown & HidNpadButton_L) && activePanel != PANEL_LEFT) {
@@ -459,14 +636,38 @@ int Application::run(int argc, char* argv[]) {
                 auto* item = activeList.getSelectedItem();
                 if (item) {
                     if (item->action == ACTION_ENTER) {
-                        std::string target;
-                        if (fs::isVirtualRoot(active.path))
-                            target = item->label + "/";
-                        else
-                            target = fs::joinPath(active.path, item->label);
-                        navigatePanel(active, target, icons);
+                        bool currentSelected =
+                            activeList.hasSelection() && activeList.isSelected(activeList.getCursor());
+                        if (activeList.hasSelection() && currentSelected) {
+                            if (allSelectedInstallPackages(active))
+                                openInstallPrompt(buildInstallItems(active, true));
+                            else
+                                toast.show(i18n.t("error.multi_open_not_supported"), "",
+                                           ToastKind::Info, 2600);
+                        } else {
+                            std::string target;
+                            if (fs::isVirtualRoot(active.path))
+                                target = item->label + "/";
+                            else
+                                target = fs::joinPath(active.path, item->label);
+                            navigatePanel(active, target, icons);
+                        }
                     } else if (item->action == ACTION_GO_UP) {
                         navigatePanel(active, fs::parentPath(active.path), icons);
+                    } else {
+                        bool hasSelection    = activeList.hasSelection();
+                        bool currentSelected = hasSelection && activeList.isSelected(activeList.getCursor());
+                        if (hasSelection && currentSelected) {
+                            if (allSelectedInstallPackages(active))
+                                openInstallPrompt(buildInstallItems(active, true));
+                            else
+                                toast.show(i18n.t("error.multi_open_not_supported"), "",
+                                           ToastKind::Info, 2600);
+                        } else {
+                            if (hasSelection)
+                                activeList.clearSelection();
+                            openFilePath(active, *item);
+                        }
                     }
                 }
             }
@@ -731,18 +932,22 @@ int Application::run(int argc, char* argv[]) {
 
         const bool anyOverlay =
             mainMenu.isOpen() || modalConfirm.isOpen() || modalChoice.isOpen()
-            || modalProgress.isOpen() || modalInfo.isOpen();
-        if (anyOverlay) {
+            || modalProgress.isOpen() || modalInfo.isOpen() || modalInstallPrompt.isOpen();
+        if (anyOverlay && !imageViewer.isOpen() && !installerScreen.isOpen()) {
             int scrimH = theme::HEADER_H + theme::PANEL_CONTENT_H;
             renderer.drawRectFilled(0, 0, theme::SCREEN_W, scrimH, theme::MENU_SCRIM_CONTENT);
         }
-        renderFooter(renderer, fontManager, i18n);
+        if (!imageViewer.isOpen() && !installerScreen.isOpen())
+            renderFooter(renderer, fontManager, i18n);
 
         if (mainMenu.isOpen()) mainMenu.render(renderer, fontManager, i18n, menuSt);
         modalConfirm.render(renderer, fontManager, i18n);
         modalChoice.render(renderer, fontManager, i18n);
         modalProgress.render(renderer, fontManager, i18n);
         modalInfo.render(renderer, fontManager);
+        modalInstallPrompt.render(renderer, fontManager, i18n);
+        imageViewer.render(renderer);
+        installerScreen.render(renderer, fontManager, i18n);
 
         toast.render(renderer, fontManager);
         renderer.present();

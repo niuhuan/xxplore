@@ -232,4 +232,84 @@ void ModalInfo::render(Renderer& renderer, FontManager& fm) {
     }
 }
 
+// ---- ModalInstallPrompt ----
+
+void ModalInstallPrompt::open(std::string t, std::string b) {
+    active = true;
+    title  = std::move(t);
+    body   = std::move(b);
+    focus  = 0;
+}
+
+void ModalInstallPrompt::close() {
+    active = false;
+    title.clear();
+    body.clear();
+}
+
+InstallPromptResult ModalInstallPrompt::handleInput(uint64_t kDown) {
+    if (!active) return InstallPromptResult::None;
+    if (kDown & HidNpadButton_B)
+        return InstallPromptResult::Cancel;
+    if (kDown & HidNpadButton_A) {
+        switch (focus) {
+        case 0: return InstallPromptResult::Cancel;
+        case 1: return InstallPromptResult::Install;
+        case 2: return InstallPromptResult::InstallAndDelete;
+        }
+    }
+    if (kDown & HidNpadButton_AnyLeft) {
+        focus--;
+        if (focus < 0) focus = 2;
+    }
+    if (kDown & HidNpadButton_AnyRight) {
+        focus++;
+        if (focus > 2) focus = 0;
+    }
+    return InstallPromptResult::None;
+}
+
+void ModalInstallPrompt::render(Renderer& renderer, FontManager& fm, const I18n& i18n) {
+    if (!active) return;
+    using namespace theme;
+
+    int cardW = 760;
+    int cardH = 240;
+    int cx    = (SCREEN_W - cardW) / 2;
+    int cy    = (SCREEN_H - cardH) / 2;
+
+    renderer.drawRoundedRectFilled(cx, cy, cardW, cardH, MENU_RADIUS, MENU_BG);
+    renderer.drawRoundedRect(cx, cy, cardW, cardH, MENU_RADIUS, MENU_BORDER);
+
+    int tx = cx + kPad;
+    int ty = cy + kPad;
+    fm.drawText(renderer.sdl(), title.c_str(), tx, ty, FONT_SIZE_ITEM, TEXT);
+    ty += FONT_SIZE_ITEM + 12;
+    fm.drawTextEllipsis(renderer.sdl(), body.c_str(), tx, ty, FONT_SIZE_SMALL, TEXT_SECONDARY,
+                        cardW - kPad * 2);
+
+    const char* labels[3] = {
+        i18n.t("installer.cancel"),
+        i18n.t("installer.install"),
+        i18n.t("installer.install_delete"),
+    };
+    int btnY = cy + cardH - 56;
+    int gap  = 28;
+    int ws[3];
+    int total = 0;
+    for (int i = 0; i < 3; i++) {
+        ws[i] = fm.measureText(labels[i], FONT_SIZE_ITEM);
+        total += ws[i];
+    }
+    total += gap * 2;
+    int bx = cx + (cardW - total) / 2;
+    for (int i = 0; i < 3; i++) {
+        SDL_Color col = (focus == i) ? PRIMARY : TEXT_SECONDARY;
+        if (i == 2 && focus != i)
+            col = DANGER;
+        fm.drawText(renderer.sdl(), labels[i], bx, btnY, FONT_SIZE_ITEM, col);
+        bx += ws[i] + gap;
+    }
+}
+
 } // namespace xplore

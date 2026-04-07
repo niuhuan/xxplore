@@ -10,6 +10,7 @@ class I18n;
 
 enum class ConfirmResult { None, Confirmed, Cancelled };
 enum class ChoiceResult  { None, Cancel, Merge, Overwrite };
+enum class InstallPromptResult { None, Cancel, Install, InstallAndDelete };
 
 /// Two-button OK/Cancel confirm dialog (delete, …). B = Cancel.
 class ModalConfirm {
@@ -75,6 +76,23 @@ private:
     bool        active = false;
     std::string title;
     std::string body;
+};
+
+/// Three-button install prompt: Cancel / Install / Install+Delete.
+class ModalInstallPrompt {
+public:
+    void open(std::string title, std::string body);
+    void close();
+
+    bool isOpen() const { return active; }
+    InstallPromptResult handleInput(uint64_t kDown);
+    void render(Renderer& renderer, FontManager& fm, const I18n& i18n);
+
+private:
+    bool        active = false;
+    std::string title;
+    std::string body;
+    int         focus = 0; ///< 0=Cancel, 1=Install, 2=Install+Delete
 };
 
 } // namespace xplore

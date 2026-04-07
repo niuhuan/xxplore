@@ -57,7 +57,7 @@ constexpr int PADDING_SM       = 8;
 constexpr int FONT_SIZE_TITLE  = 20;
 constexpr int FONT_SIZE_ITEM   = 18;
 constexpr int FONT_SIZE_SMALL  = 14;
-constexpr int FONT_SIZE_FOOTER = 12;   ///< Footer button-tips font size
+constexpr int FONT_SIZE_FOOTER = 16;   ///< Footer button-tips font size
 
 // --- Menu ---
 constexpr int MENU_W           = 400;

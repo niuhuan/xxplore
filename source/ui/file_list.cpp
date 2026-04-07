@@ -42,17 +42,21 @@ void FileList::reloadItems(std::vector<ListItem> newItems, bool hasGoUpEntry,
 // --- cursor movement ---
 
 void FileList::moveCursorUp() {
-    if (cursor > 0) {
+    if (items.empty()) return;
+    if (cursor > 0)
         cursor--;
-        dirty = true;
-    }
+    else
+        cursor = static_cast<int>(items.size()) - 1;
+    dirty = true;
 }
 
 void FileList::moveCursorDown() {
-    if (cursor < (int)items.size() - 1) {
+    if (items.empty()) return;
+    if (cursor < (int)items.size() - 1)
         cursor++;
-        dirty = true;
-    }
+    else
+        cursor = 0;
+    dirty = true;
 }
 
 void FileList::moveCursorPageUp(int pageItems) {

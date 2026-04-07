@@ -13,6 +13,17 @@ struct FileEntry {
     uint64_t    size        = 0;
 };
 
+struct FileStatInfo {
+    bool     exists      = false;
+    bool     isDirectory = false;
+    uint64_t size        = 0;
+};
+
+struct ImageInfo {
+    int width  = 0;
+    int height = 0;
+};
+
 inline bool isVirtualRoot(const std::string& path) {
     return path.empty() || path == "/";
 }
@@ -23,6 +34,11 @@ std::vector<FileEntry> listDir(const std::string& path);
 std::string parentPath(const std::string& path);
 std::string joinPath(const std::string& dir, const std::string& name);
 const char* iconForEntry(const FileEntry& entry);
+bool statPath(const std::string& path, FileStatInfo& out);
+bool isImagePath(const std::string& path);
+bool isInstallPackagePath(const std::string& path);
+std::string formatSize(uint64_t bytes);
+bool probeImageInfo(const std::string& path, ImageInfo& out, std::string& errOut);
 
 bool pathExists(const std::string& path);
 bool isDirectoryPath(const std::string& path);

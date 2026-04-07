@@ -4,10 +4,160 @@
 #include <cstdio>
 #include <cstring>
 #include <dirent.h>
+#include <string>
 #include <sys/stat.h>
 
 namespace xplore {
 namespace fs {
+
+namespace {
+
+std::string toLowerStr(const std::string& s) {
+    std::string r = s;
+    for (auto& c : r)
+        c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    return r;
+}
+
+std::string pathExtensionLower(const std::string& path) {
+    size_t slash = path.find_last_of("/\\");
+    size_t dot   = path.rfind('.');
+    if (dot == std::string::npos || (slash != std::string::npos && dot < slash))
+        return {};
+    return toLowerStr(path.substr(dot));
+}
+
+uint16_t readBe16(const unsigned char* p) {
+    return static_cast<uint16_t>((static_cast<uint16_t>(p[0]) << 8) | p[1]);
+}
+
+uint32_t readBe32(const unsigned char* p) {
+    return (static_cast<uint32_t>(p[0]) << 24) |
+           (static_cast<uint32_t>(p[1]) << 16) |
+           (static_cast<uint32_t>(p[2]) << 8) |
+           static_cast<uint32_t>(p[3]);
+}
+
+uint16_t readLe16(const unsigned char* p) {
+    return static_cast<uint16_t>(p[0] | (static_cast<uint16_t>(p[1]) << 8));
+}
+
+uint32_t readLe32(const unsigned char* p) {
+    return static_cast<uint32_t>(p[0]) |
+           (static_cast<uint32_t>(p[1]) << 8) |
+           (static_cast<uint32_t>(p[2]) << 16) |
+           (static_cast<uint32_t>(p[3]) << 24);
+}
+
+int32_t readLe32Signed(const unsigned char* p) {
+    return static_cast<int32_t>(readLe32(p));
+}
+
+bool probePngInfo(FILE* f, ImageInfo& out, std::string& errOut) {
+    unsigned char buf[24];
+    if (fread(buf, 1, sizeof(buf), f) != sizeof(buf)) {
+        errOut = "read png header failed";
+        return false;
+    }
+    static const unsigned char kSig[8] = {0x89, 'P', 'N', 'G', '\r', '\n', 0x1a, '\n'};
+    if (memcmp(buf, kSig, sizeof(kSig)) != 0) {
+        errOut = "invalid png signature";
+        return false;
+    }
+    out.width  = static_cast<int>(readBe32(buf + 16));
+    out.height = static_cast<int>(readBe32(buf + 20));
+    return out.width > 0 && out.height > 0;
+}
+
+bool probeGifInfo(FILE* f, ImageInfo& out, std::string& errOut) {
+    unsigned char buf[10];
+    if (fread(buf, 1, sizeof(buf), f) != sizeof(buf)) {
+        errOut = "read gif header failed";
+        return false;
+    }
+    if (memcmp(buf, "GIF87a", 6) != 0 && memcmp(buf, "GIF89a", 6) != 0) {
+        errOut = "invalid gif signature";
+        return false;
+    }
+    out.width  = static_cast<int>(readLe16(buf + 6));
+    out.height = static_cast<int>(readLe16(buf + 8));
+    return out.width > 0 && out.height > 0;
+}
+
+bool probeBmpInfo(FILE* f, ImageInfo& out, std::string& errOut) {
+    unsigned char buf[32];
+    if (fread(buf, 1, sizeof(buf), f) < 26) {
+        errOut = "read bmp header failed";
+        return false;
+    }
+    if (buf[0] != 'B' || buf[1] != 'M') {
+        errOut = "invalid bmp signature";
+        return false;
+    }
+    uint32_t dibSize = readLe32(buf + 14);
+    if (dibSize == 12) {
+        out.width  = static_cast<int>(readLe16(buf + 18));
+        out.height = static_cast<int>(readLe16(buf + 20));
+    } else {
+        out.width  = readLe32Signed(buf + 18);
+        int32_t h  = readLe32Signed(buf + 22);
+        out.height = h < 0 ? -h : h;
+    }
+    return out.width > 0 && out.height > 0;
+}
+
+bool probeJpegInfo(FILE* f, ImageInfo& out, std::string& errOut) {
+    unsigned char marker[2];
+    if (fread(marker, 1, 2, f) != 2 || marker[0] != 0xff || marker[1] != 0xd8) {
+        errOut = "invalid jpeg signature";
+        return false;
+    }
+
+    for (;;) {
+        int c = fgetc(f);
+        while (c == 0xff)
+            c = fgetc(f);
+        if (c == EOF) {
+            errOut = "unexpected jpeg eof";
+            return false;
+        }
+
+        if (c == 0xd9 || c == 0xda) {
+            errOut = "jpeg size marker not found";
+            return false;
+        }
+
+        unsigned char lenBuf[2];
+        if (fread(lenBuf, 1, 2, f) != 2) {
+            errOut = "read jpeg segment failed";
+            return false;
+        }
+        uint16_t segLen = readBe16(lenBuf);
+        if (segLen < 2) {
+            errOut = "invalid jpeg segment";
+            return false;
+        }
+
+        if ((c >= 0xc0 && c <= 0xc3) || (c >= 0xc5 && c <= 0xc7) ||
+            (c >= 0xc9 && c <= 0xcb) || (c >= 0xcd && c <= 0xcf)) {
+            unsigned char sof[5];
+            if (fread(sof, 1, sizeof(sof), f) != sizeof(sof)) {
+                errOut = "read jpeg sof failed";
+                return false;
+            }
+            out.height = static_cast<int>(readBe16(sof + 1));
+            out.width  = static_cast<int>(readBe16(sof + 3));
+            return out.width > 0 && out.height > 0;
+        }
+
+        if (fseek(f, static_cast<long>(segLen) - 2L, SEEK_CUR) != 0) {
+            errOut = "seek jpeg segment failed";
+            return false;
+        }
+    }
+}
+
+} // namespace
 
 bool pathAllowsSelection(const std::string& path) {
     if (isVirtualRoot(path))
@@ -114,13 +264,6 @@ std::string joinPath(const std::string& dir, const std::string& name) {
     return dir + "/" + name;
 }
 
-static std::string toLowerStr(const std::string& s) {
-    std::string r = s;
-    for (auto& c : r)
-        c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-    return r;
-}
-
 const char* iconForEntry(const FileEntry& entry) {
     if (entry.isDirectory)
         return "folder";
@@ -155,6 +298,78 @@ const char* iconForEntry(const FileEntry& entry) {
         return "code";
 
     return "file";
+}
+
+bool statPath(const std::string& path, FileStatInfo& out) {
+    struct stat st;
+    memset(&st, 0, sizeof(st));
+    if (stat(path.c_str(), &st) != 0) {
+        out = {};
+        return false;
+    }
+    out.exists      = true;
+    out.isDirectory = S_ISDIR(st.st_mode);
+    out.size        = static_cast<uint64_t>(st.st_size);
+    return true;
+}
+
+bool isImagePath(const std::string& path) {
+    const std::string ext = pathExtensionLower(path);
+    return ext == ".png" || ext == ".jpg" || ext == ".jpeg" ||
+           ext == ".gif" || ext == ".bmp";
+}
+
+bool isInstallPackagePath(const std::string& path) {
+    const std::string ext = pathExtensionLower(path);
+    return ext == ".nsp" || ext == ".nsz" || ext == ".xci" || ext == ".xcz";
+}
+
+std::string formatSize(uint64_t bytes) {
+    static const char* kUnits[] = {"B", "KB", "MB", "GB", "TB"};
+    double value = static_cast<double>(bytes);
+    size_t unit  = 0;
+    while (value >= 1024.0 && unit < 4) {
+        value /= 1024.0;
+        unit++;
+    }
+
+    char buf[64];
+    if (unit == 0)
+        snprintf(buf, sizeof(buf), "%llu %s",
+                 static_cast<unsigned long long>(bytes), kUnits[unit]);
+    else if (value >= 10.0)
+        snprintf(buf, sizeof(buf), "%.0f %s", value, kUnits[unit]);
+    else
+        snprintf(buf, sizeof(buf), "%.1f %s", value, kUnits[unit]);
+    return buf;
+}
+
+bool probeImageInfo(const std::string& path, ImageInfo& out, std::string& errOut) {
+    out = {};
+
+    FILE* f = fopen(path.c_str(), "rb");
+    if (!f) {
+        errOut = "open image failed";
+        return false;
+    }
+
+    std::string ext = pathExtensionLower(path);
+    bool ok         = false;
+    if (ext == ".png")
+        ok = probePngInfo(f, out, errOut);
+    else if (ext == ".gif")
+        ok = probeGifInfo(f, out, errOut);
+    else if (ext == ".bmp")
+        ok = probeBmpInfo(f, out, errOut);
+    else if (ext == ".jpg" || ext == ".jpeg")
+        ok = probeJpegInfo(f, out, errOut);
+    else
+        errOut = "unsupported image format";
+
+    fclose(f);
+    if (!ok && errOut.empty())
+        errOut = "probe image failed";
+    return ok;
 }
 
 } // namespace fs
