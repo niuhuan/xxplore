@@ -131,6 +131,7 @@ int main(int argc, char* argv[]) {
     socketInitializeDefault();
     nxlinkStdio();
     printf("Xplore: nxlink connected\n");
+    printf("argv[0]: %s\n", (argc > 0 && argv && argv[0]) ? argv[0] : "");
 #endif
 
     romfsInit();
