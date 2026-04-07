@@ -1,0 +1,15 @@
+# scripts and temp files
+tmp/
+.venv/
+
+# build files
+build/
+*.nro
+*.nsp
+*.npdm
+*.elf
+*.nacp
+*.log
+
+# agents files
+AGENTS.md
