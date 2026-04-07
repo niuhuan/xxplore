@@ -5,18 +5,29 @@
 
 namespace xplore {
 
+FileList::~FileList() {
+    destroyCache();
+}
+
 void FileList::setItems(std::vector<ListItem> newItems) {
     items = std::move(newItems);
     cursor = 0;
     scrollTop = 0;
+    dirty = true;
 }
 
 void FileList::moveCursorUp() {
-    if (cursor > 0) cursor--;
+    if (cursor > 0) {
+        cursor--;
+        dirty = true;
+    }
 }
 
 void FileList::moveCursorDown() {
-    if (cursor < (int)items.size() - 1) cursor++;
+    if (cursor < (int)items.size() - 1) {
+        cursor++;
+        dirty = true;
+    }
 }
 
 const ListItem* FileList::getSelectedItem() const {
@@ -25,10 +36,27 @@ const ListItem* FileList::getSelectedItem() const {
     return nullptr;
 }
 
-void FileList::render(Renderer& renderer, FontManager& fontManager,
-                      int x, int y, int width, int height, bool active) {
-    renderer.setClipRect(x, y, width, height);
-    renderer.drawRectFilled(x, y, width, height, theme::BG);
+void FileList::updateCache(Renderer& renderer, FontManager& fontManager,
+                           int width, int height) {
+    bool sizeChanged = (width != cacheW || height != cacheH);
+
+    if (sizeChanged) {
+        destroyCache();
+        cacheW = width;
+        cacheH = height;
+        cachedTex = renderer.createRenderTarget(cacheW, cacheH);
+        dirty = true;
+    }
+
+    if (!dirty || !cachedTex)
+        return;
+
+    dirty = false;
+
+    renderer.setRenderTarget(cachedTex);
+
+    // Clear the render target with background color
+    renderer.clear(theme::BG);
 
     // Auto-scroll to keep cursor visible
     int cursorTop = cursor * theme::ITEM_H;
@@ -38,44 +66,48 @@ void FileList::render(Renderer& renderer, FontManager& fontManager,
     else if (cursorBot > scrollTop + height)
         scrollTop = cursorBot - height;
 
-    // Icon occupies ICON_SIZE width; text starts after icon slot + padding
-    int iconX   = x + theme::PADDING;
-    int textX   = iconX + theme::ICON_SIZE + theme::PADDING_SM;
+    int iconX = theme::PADDING;
+    int textX = iconX + theme::ICON_SIZE + theme::PADDING_SM;
 
     for (int i = 0; i < (int)items.size(); i++) {
-        int iy = y + i * theme::ITEM_H - scrollTop;
+        int iy = i * theme::ITEM_H - scrollTop;
 
-        // Skip items outside the visible area
-        if (iy + theme::ITEM_H < y || iy > y + height)
+        if (iy + theme::ITEM_H < 0 || iy > height)
             continue;
 
-        // Cursor highlight
-        if (active && i == cursor) {
-            renderer.drawRectFilled(x, iy, width, theme::ITEM_H,
+        // Always render cursor highlight; inactive mask hides it during compositing
+        if (i == cursor) {
+            renderer.drawRectFilled(0, iy, width, theme::ITEM_H,
                                     theme::CURSOR_ROW);
         }
 
-        // Icon (centered vertically within the row)
         if (items[i].icon) {
             int iconY = iy + (theme::ITEM_H - theme::ICON_SIZE) / 2;
             renderer.drawTexture(items[i].icon, iconX, iconY,
                                  theme::ICON_SIZE, theme::ICON_SIZE);
         }
 
-        // Label (vertically centered)
         fontManager.drawText(renderer.sdl(), items[i].label.c_str(),
             textX,
             iy + (theme::ITEM_H - theme::FONT_SIZE_ITEM) / 2,
             theme::FONT_SIZE_ITEM, theme::TEXT);
 
-        // Bottom divider
         renderer.drawRectFilled(
-            x + theme::PADDING, iy + theme::ITEM_H - 1,
+            theme::PADDING, iy + theme::ITEM_H - 1,
             width - theme::PADDING * 2, 1,
             theme::DIVIDER);
     }
 
-    renderer.clearClipRect();
+    renderer.resetRenderTarget();
+}
+
+void FileList::destroyCache() {
+    if (cachedTex) {
+        SDL_DestroyTexture(cachedTex);
+        cachedTex = nullptr;
+    }
+    cacheW = 0;
+    cacheH = 0;
 }
 
 } // namespace xplore

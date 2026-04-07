@@ -1,4 +1,5 @@
 #include <cstdio>
+#include <cmath>
 #include <string>
 #include <vector>
 #include <switch.h>
@@ -9,15 +10,43 @@
 #include "ui/file_list.hpp"
 #include "ui/toast.hpp"
 
-// Action ids for ListItem
 enum { ACTION_NONE = 0, ACTION_SHOW_TOAST };
 enum ActivePanel { PANEL_LEFT, PANEL_RIGHT };
 
-/// Load a set of named icon textures from romfs:/icons/.
-/// Returns a vector of {name, texture} pairs; caller must destroy textures.
 struct IconEntry {
-    const char* name;
+    const char*  name;
     SDL_Texture* tex;
+};
+
+static float easeOutCubic(float t) {
+    float t1 = 1.0f - t;
+    return 1.0f - t1 * t1 * t1;
+}
+
+struct PanelAnim {
+    float startLeftW  = 0.0f;
+    float targetLeftW = 0.0f;
+    float progress    = 1.0f;   // 1 = idle / finished
+
+    void start(float from, float to) {
+        startLeftW  = from;
+        targetLeftW = to;
+        progress    = 0.0f;
+    }
+
+    void update(uint32_t deltaMs) {
+        if (progress >= 1.0f) return;
+        progress += static_cast<float>(deltaMs) / xplore::theme::ANIM_DURATION_F;
+        if (progress > 1.0f) progress = 1.0f;
+    }
+
+    float currentLeftW() const {
+        if (progress >= 1.0f) return targetLeftW;
+        float t = easeOutCubic(progress);
+        return startLeftW + (targetLeftW - startLeftW) * t;
+    }
+
+    bool isAnimating() const { return progress < 1.0f; }
 };
 
 static std::vector<IconEntry> loadIcons(xplore::Renderer& renderer) {
@@ -36,14 +65,12 @@ static std::vector<IconEntry> loadIcons(xplore::Renderer& renderer) {
     return icons;
 }
 
-/// Find an icon texture by name from the loaded icon set.
 static SDL_Texture* findIcon(const std::vector<IconEntry>& icons, const char* name) {
     for (auto& e : icons)
         if (strcmp(e.name, name) == 0) return e.tex;
     return nullptr;
 }
 
-/// Build the root-level list items (device list + debug entries).
 static std::vector<xplore::ListItem> buildListItems(SDL_Texture* folderIcon) {
     std::vector<xplore::ListItem> items;
     items.push_back({"sdmc:", folderIcon, ACTION_NONE});
@@ -75,6 +102,8 @@ int main(int argc, char* argv[]) {
     if (ok) icons = loadIcons(renderer);
 
     if (ok) {
+        using namespace xplore::theme;
+
         xplore::Toast toast;
 
         SDL_Texture* folderIcon = findIcon(icons, "folder");
@@ -85,10 +114,15 @@ int main(int argc, char* argv[]) {
         rightList.setItems(buildListItems(folderIcon));
 
         ActivePanel activePanel = PANEL_LEFT;
+
+        PanelAnim anim;
+        anim.targetLeftW = static_cast<float>(ACTIVE_PANEL_W);
+        anim.startLeftW  = anim.targetLeftW;
+
         uint32_t lastTick = SDL_GetTicks();
 
         while (appletMainLoop()) {
-            uint32_t now = SDL_GetTicks();
+            uint32_t now   = SDL_GetTicks();
             uint32_t delta = now - lastTick;
             lastTick = now;
 
@@ -98,15 +132,23 @@ int main(int argc, char* argv[]) {
             if (kDown & HidNpadButton_Plus)
                 break;
 
-            if (kDown & HidNpadButton_L) {
-                activePanel = PANEL_LEFT;
-                printf("Switch to LEFT panel\n");
-            }
-            if (kDown & HidNpadButton_R) {
-                activePanel = PANEL_RIGHT;
-                printf("Switch to RIGHT panel\n");
+            // L/R panel switching — blocked while animating
+            if (!anim.isAnimating()) {
+                if ((kDown & HidNpadButton_L) && activePanel != PANEL_LEFT) {
+                    activePanel = PANEL_LEFT;
+                    anim.start(anim.currentLeftW(),
+                               static_cast<float>(ACTIVE_PANEL_W));
+                    printf("Switch to LEFT panel\n");
+                }
+                if ((kDown & HidNpadButton_R) && activePanel != PANEL_RIGHT) {
+                    activePanel = PANEL_RIGHT;
+                    anim.start(anim.currentLeftW(),
+                               static_cast<float>(INACTIVE_PANEL_W));
+                    printf("Switch to RIGHT panel\n");
+                }
             }
 
+            // Up/Down/A always go to the active panel
             xplore::FileList& active =
                 (activePanel == PANEL_LEFT) ? leftList : rightList;
 
@@ -125,58 +167,57 @@ int main(int argc, char* argv[]) {
             }
 
             toast.update(delta);
+            anim.update(delta);
 
-            // --- Render ---
+            // --- Update off-screen caches (only redraws when dirty) ---
+            int panelY = HEADER_H;
+            int panelH = PANEL_CONTENT_H;
+            leftList.updateCache(renderer, fontManager, ACTIVE_PANEL_W, panelH);
+            rightList.updateCache(renderer, fontManager, ACTIVE_PANEL_W, panelH);
+
+            // --- Composite to screen ---
             renderer.clear(xplore::theme::BG);
 
             // Header bar
-            renderer.drawRectFilled(0, 0,
-                xplore::theme::SCREEN_W, xplore::theme::HEADER_H,
-                xplore::theme::HEADER_BG);
+            renderer.drawRectFilled(0, 0, SCREEN_W, HEADER_H, HEADER_BG);
             fontManager.drawText(renderer.sdl(), "Xplore",
-                xplore::theme::PADDING,
-                (xplore::theme::HEADER_H - xplore::theme::FONT_SIZE_TITLE) / 2,
-                xplore::theme::FONT_SIZE_TITLE, xplore::theme::PRIMARY);
-            renderer.drawRectFilled(0, xplore::theme::HEADER_H - 1,
-                xplore::theme::SCREEN_W, 1, xplore::theme::DIVIDER);
+                PADDING, (HEADER_H - FONT_SIZE_TITLE) / 2,
+                FONT_SIZE_TITLE, PRIMARY);
+            renderer.drawRectFilled(0, HEADER_H - 1, SCREEN_W, 1, DIVIDER);
 
-            // Dual-panel geometry
-            int leftW, rightW, rightX;
-            if (activePanel == PANEL_LEFT) {
-                leftW  = xplore::theme::ACTIVE_PANEL_W;
-                rightW = xplore::theme::INACTIVE_PANEL_W;
-            } else {
-                leftW  = xplore::theme::INACTIVE_PANEL_W;
-                rightW = xplore::theme::ACTIVE_PANEL_W;
-            }
-            rightX = leftW;
-            int panelY = xplore::theme::HEADER_H;
-            int panelH = xplore::theme::PANEL_CONTENT_H;
+            // Animated panel widths
+            float leftWf  = anim.currentLeftW();
+            int   leftW   = static_cast<int>(leftWf);
+            int   rightW  = SCREEN_W - leftW;
+            int   rightX  = leftW;
 
-            // Left panel
-            leftList.render(renderer, fontManager,
-                0, panelY, leftW, panelH, activePanel == PANEL_LEFT);
+            // Left panel — clip to current animated width, draw cached texture
+            renderer.setClipRect(0, panelY, leftW, panelH);
+            renderer.drawTexture(leftList.getCachedTexture(),
+                                 0, panelY, ACTIVE_PANEL_W, panelH);
+            renderer.clearClipRect();
             if (activePanel != PANEL_LEFT)
-                renderer.drawRectFilled(0, panelY, leftW, panelH,
-                    xplore::theme::MASK_OVERLAY);
+                renderer.drawRectFilled(0, panelY, leftW, panelH, MASK_OVERLAY);
 
-            // Divider between panels
-            renderer.drawRectFilled(rightX - 1, panelY, 2, panelH,
-                xplore::theme::DIVIDER);
+            // Divider line between panels
+            renderer.drawRectFilled(rightX - 1, panelY, 2, panelH, DIVIDER);
 
-            // Right panel
-            rightList.render(renderer, fontManager,
-                rightX, panelY, rightW, panelH, activePanel == PANEL_RIGHT);
+            // Right panel — clip to current animated width, draw cached texture
+            renderer.setClipRect(rightX, panelY, rightW, panelH);
+            renderer.drawTexture(rightList.getCachedTexture(),
+                                 rightX, panelY, ACTIVE_PANEL_W, panelH);
+            renderer.clearClipRect();
             if (activePanel != PANEL_RIGHT)
-                renderer.drawRectFilled(rightX, panelY, rightW, panelH,
-                    xplore::theme::MASK_OVERLAY);
+                renderer.drawRectFilled(rightX, panelY, rightW, panelH, MASK_OVERLAY);
 
             toast.render(renderer, fontManager);
             renderer.present();
         }
+
+        leftList.destroyCache();
+        rightList.destroyCache();
     }
 
-    // Cleanup icon textures
     for (auto& e : icons)
         if (e.tex) SDL_DestroyTexture(e.tex);
 

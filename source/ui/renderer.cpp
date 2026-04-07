@@ -94,4 +94,23 @@ void Renderer::drawTexture(SDL_Texture* tex, int x, int y, int w, int h) {
     SDL_RenderCopy(sdlRenderer, tex, nullptr, &dst);
 }
 
+SDL_Texture* Renderer::createRenderTarget(int w, int h) {
+    SDL_Texture* tex = SDL_CreateTexture(sdlRenderer,
+        SDL_PIXELFORMAT_RGBA8888, SDL_TEXTUREACCESS_TARGET, w, h);
+    if (!tex) {
+        printf("createRenderTarget failed: %s\n", SDL_GetError());
+        return nullptr;
+    }
+    SDL_SetTextureBlendMode(tex, SDL_BLENDMODE_BLEND);
+    return tex;
+}
+
+void Renderer::setRenderTarget(SDL_Texture* tex) {
+    SDL_SetRenderTarget(sdlRenderer, tex);
+}
+
+void Renderer::resetRenderTarget() {
+    SDL_SetRenderTarget(sdlRenderer, nullptr);
+}
+
 } // namespace xplore

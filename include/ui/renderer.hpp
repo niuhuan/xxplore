@@ -31,6 +31,14 @@ public:
     /// Draw an SDL_Texture at the given position and size.
     void drawTexture(SDL_Texture* tex, int x, int y, int w, int h);
 
+    /// Create a blank RGBA texture usable as a render target.
+    /// Caller owns the returned texture and must SDL_DestroyTexture it.
+    SDL_Texture* createRenderTarget(int w, int h);
+    /// Redirect all subsequent drawing to an off-screen texture.
+    void setRenderTarget(SDL_Texture* tex);
+    /// Restore drawing to the default screen back-buffer.
+    void resetRenderTarget();
+
     SDL_Renderer* sdl() const { return sdlRenderer; }
 
 private:

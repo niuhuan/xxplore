@@ -63,5 +63,9 @@ constexpr int TOAST_H        = 80;
 constexpr int TOAST_MARGIN   = 20;
 constexpr int TOAST_BORDER_W = 3;
 
+// --- Animation ---
+constexpr int   ANIM_DURATION_MS = 250;
+constexpr float ANIM_DURATION_F  = 250.0f;
+
 } // namespace theme
 } // namespace xplore
