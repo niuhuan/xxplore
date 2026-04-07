@@ -1,0 +1,37 @@
+#pragma once
+#include "util/app_config.hpp"
+#include <cstdint>
+
+namespace xplore {
+
+class Renderer;
+class FontManager;
+class I18n;
+
+enum class SettingsAction { None, Close, Save };
+
+class SettingsScreen {
+public:
+    void open(config::AppLanguage currentLanguage);
+    void close();
+
+    bool isOpen() const { return open_; }
+    config::AppLanguage selectedLanguage() const { return selectedLanguage_; }
+
+    SettingsAction handleInput(uint64_t kDown);
+    void render(Renderer& renderer, FontManager& fm, const I18n& i18n) const;
+
+private:
+    int languageIndex(int col) const;
+    void moveLanguageHorizontal(int delta);
+    void moveVertical(int delta);
+
+    bool open_ = false;
+    config::AppLanguage currentLanguage_;
+    config::AppLanguage selectedLanguage_;
+    int focusRow_ = 0; // 0 language row, 1 button row
+    int languageFocusCol_ = 0;
+    int buttonFocusCol_ = 0;
+};
+
+} // namespace xplore

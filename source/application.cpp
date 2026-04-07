@@ -10,8 +10,10 @@
 #include "ui/main_menu.hpp"
 #include "ui/modals.hpp"
 #include "ui/renderer.hpp"
+#include "ui/settings_screen.hpp"
 #include "ui/theme.hpp"
 #include "ui/toast.hpp"
+#include "util/app_config.hpp"
 
 #include <cstdio>
 #include <cstring>
@@ -191,8 +193,15 @@ int Application::run(int argc, char* argv[]) {
         return 1;
     }
 
+    config::AppConfig appConfig = config::defaultConfig();
+    std::string configPath;
+    config::loadConfigFromArgv0(argc > 0 ? argv[0] : nullptr, appConfig, configPath);
+
     I18n i18n;
-    i18n.load("romfs:/i18n/en.ini");
+    if (!i18n.load(config::languageRomfsPath(appConfig.language))) {
+        appConfig = config::defaultConfig();
+        i18n.load(config::languageRomfsPath(appConfig.language));
+    }
 
     std::vector<IconEntry> icons = loadIcons(renderer);
 
@@ -206,6 +215,7 @@ int Application::run(int argc, char* argv[]) {
     ModalInstallPrompt modalInstallPrompt;
     ImageViewer imageViewer;
     InstallerScreen installerScreen;
+    SettingsScreen settingsScreen;
 
     PanelState leftPanel;
     PanelState rightPanel;
@@ -243,8 +253,30 @@ int Application::run(int argc, char* argv[]) {
         }
     };
 
+    auto refreshInstallAffectedDirs = [&](const std::vector<std::string>& dirs) {
+        bool refreshLeft = false;
+        bool refreshRight = false;
+        for (const auto& dir : dirs) {
+            if (leftPanel.path == dir)
+                refreshLeft = true;
+            if (rightPanel.path == dir)
+                refreshRight = true;
+        }
+
+        if (refreshLeft) {
+            int keepCursor = leftPanel.list.getCursor();
+            leftPanel.list.clearSelection();
+            reloadPanel(leftPanel, icons, keepCursor);
+        }
+        if (refreshRight) {
+            int keepCursor = rightPanel.list.getCursor();
+            rightPanel.list.clearSelection();
+            reloadPanel(rightPanel, icons, keepCursor);
+        }
+    };
+
     auto appTitle = [&]() -> const char* {
-        return appletMode ? "Xplore(Applet)" : "Xplore";
+        return appletMode ? "Xxplre(Applet)" : "Xplore";
     };
 
     auto buildInstallItems = [&](PanelState& panel, bool useSelection) {
@@ -481,7 +513,7 @@ int Application::run(int argc, char* argv[]) {
         bool modalBlocking =
             modalConfirm.isOpen() || modalChoice.isOpen() || modalProgress.isOpen() ||
             modalInfo.isOpen() || modalInstallPrompt.isOpen() || imageViewer.isOpen() ||
-            installerScreen.isOpen();
+            installerScreen.isOpen() || settingsScreen.isOpen();
         bool menuBlocking = mainMenu.isOpen();
 
         // Plus toggles menu
@@ -498,14 +530,36 @@ int Application::run(int argc, char* argv[]) {
             imageViewer.handleInput(kDown);
         }
 
+        if (settingsScreen.isOpen()) {
+            SettingsAction action = settingsScreen.handleInput(kDown);
+            if (action == SettingsAction::Close) {
+                settingsScreen.close();
+            } else if (action == SettingsAction::Save) {
+                config::AppConfig nextConfig = appConfig;
+                nextConfig.language = settingsScreen.selectedLanguage();
+                std::string err;
+                if (!config::saveConfig(configPath, nextConfig, err)) {
+                    toast.show(i18n.t("error.operation_failed"), err.c_str(), ToastKind::Error, 3200);
+                } else {
+                    appConfig = nextConfig;
+                    if (!i18n.load(config::languageRomfsPath(appConfig.language))) {
+                        toast.show(i18n.t("error.operation_failed"), "load language failed",
+                                   ToastKind::Error, 3200);
+                    } else {
+                        settingsScreen.close();
+                    }
+                }
+            }
+        }
+
         if (installerScreen.isOpen()) {
             installerScreen.update();
             InstallerAction action = installerScreen.handleInput(kDown);
             if (action == InstallerAction::Close) {
+                if (installerScreen.shouldRefreshOnClose())
+                    refreshInstallAffectedDirs(installerScreen.sourceDirectories());
                 installerScreen.close();
                 pendingInstallItems.clear();
-            } else if (action == InstallerAction::ExitApp) {
-                appQuit = true;
             }
         }
 
@@ -698,7 +752,7 @@ int Application::run(int argc, char* argv[]) {
                 mainMenu.close();
                 break;
             case MenuCommand::Settings:
-                modalInfo.open(i18n.t("menu.settings"), i18n.t("help.settings_body"));
+                settingsScreen.open(appConfig.language);
                 mainMenu.close();
                 break;
             case MenuCommand::Help:
@@ -933,11 +987,11 @@ int Application::run(int argc, char* argv[]) {
         const bool anyOverlay =
             mainMenu.isOpen() || modalConfirm.isOpen() || modalChoice.isOpen()
             || modalProgress.isOpen() || modalInfo.isOpen() || modalInstallPrompt.isOpen();
-        if (anyOverlay && !imageViewer.isOpen() && !installerScreen.isOpen()) {
+        if (anyOverlay && !imageViewer.isOpen() && !installerScreen.isOpen() && !settingsScreen.isOpen()) {
             int scrimH = theme::HEADER_H + theme::PANEL_CONTENT_H;
             renderer.drawRectFilled(0, 0, theme::SCREEN_W, scrimH, theme::MENU_SCRIM_CONTENT);
         }
-        if (!imageViewer.isOpen() && !installerScreen.isOpen())
+        if (!imageViewer.isOpen() && !installerScreen.isOpen() && !settingsScreen.isOpen())
             renderFooter(renderer, fontManager, i18n);
 
         if (mainMenu.isOpen()) mainMenu.render(renderer, fontManager, i18n, menuSt);
@@ -948,6 +1002,7 @@ int Application::run(int argc, char* argv[]) {
         modalInstallPrompt.render(renderer, fontManager, i18n);
         imageViewer.render(renderer);
         installerScreen.render(renderer, fontManager, i18n);
+        settingsScreen.render(renderer, fontManager, i18n);
 
         toast.render(renderer, fontManager);
         renderer.present();

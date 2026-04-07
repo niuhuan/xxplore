@@ -20,7 +20,7 @@ struct InstallQueueItem {
 
 enum class InstallDeleteMode { KeepFiles, DeleteAfterInstall };
 enum class InstallTarget { Nand, SdCard };
-enum class InstallerAction { None, Close, ExitApp };
+enum class InstallerAction { None, Close };
 
 class InstallerScreen {
 public:
@@ -31,6 +31,8 @@ public:
 
     bool isOpen() const { return open_; }
     bool isBusy() const { return open_ && (state_ == State::Loading || state_ == State::Running); }
+    bool shouldRefreshOnClose() const;
+    std::vector<std::string> sourceDirectories() const;
 
     void update();
     InstallerAction handleInput(uint64_t kDown);

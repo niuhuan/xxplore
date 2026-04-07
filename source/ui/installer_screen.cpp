@@ -72,6 +72,23 @@ void InstallerScreen::close() {
     errorMessage_.clear();
 }
 
+bool InstallerScreen::shouldRefreshOnClose() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return state_ == State::Finished && deleteMode_ == InstallDeleteMode::DeleteAfterInstall;
+}
+
+std::vector<std::string> InstallerScreen::sourceDirectories() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    std::vector<std::string> dirs;
+    dirs.reserve(items_.size());
+    for (const auto& item : items_) {
+        std::string dir = fs::parentPath(item.path);
+        if (std::find(dirs.begin(), dirs.end(), dir) == dirs.end())
+            dirs.push_back(std::move(dir));
+    }
+    return dirs;
+}
+
 void InstallerScreen::appendLog(std::string line) {
     if (line.empty())
         return;
@@ -217,7 +234,7 @@ InstallerAction InstallerScreen::handleInput(uint64_t kDown) {
 
         if (state_ == State::Finished) {
             if (kDown & HidNpadButton_Plus)
-                return InstallerAction::ExitApp;
+                return InstallerAction::Close;
             return InstallerAction::None;
         }
 

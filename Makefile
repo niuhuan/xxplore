@@ -12,7 +12,7 @@ include $(DEVKITPRO)/libnx/switch_rules
 #---------------------------------------------------------------------------------
 TARGET		:=	$(notdir $(CURDIR))
 BUILD		:=	build
-SOURCES		:=	source source/ui source/fs source/i18n source/install
+SOURCES		:=	source source/ui source/fs source/i18n source/install source/util
 DATA		:=	data
 INCLUDES	:=	include include/ui include/fs include/i18n include/install include/util
 ROMFS	:=	romfs
@@ -40,7 +40,7 @@ CXXFLAGS	:= $(CFLAGS) -fno-rtti -std=gnu++17
 ASFLAGS	:=	-g $(ARCH)
 LDFLAGS	=	-specs=$(DEVKITPRO)/libnx/switch.specs -g $(ARCH) -Wl,-Map,$(notdir $*.map)
 
-LIBS	:=	-lSDL2_ttf -lSDL2_image -lSDL2_gfx -lpng -ljpeg -lwebp `sdl2-config --libs` `$(PREFIX)pkg-config --libs freetype2`
+LIBS	:=	-lSDL2_ttf -lSDL2_image -lSDL2_gfx -lpng -ljpeg -lwebp -ljson-c `sdl2-config --libs` `$(PREFIX)pkg-config --libs freetype2`
 LIBS	+=	-lzstd
 
 #---------------------------------------------------------------------------------
