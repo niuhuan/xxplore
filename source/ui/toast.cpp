@@ -49,9 +49,15 @@ void Toast::render(Renderer& renderer, FontManager& fontManager) {
 
     int x = (theme::SCREEN_W - theme::TOAST_W) / 2;
     int y = theme::SCREEN_H - theme::TOAST_H - theme::TOAST_MARGIN;
+    int r = theme::TOAST_RADIUS;
 
-    renderer.drawRectFilled(x, y, theme::TOAST_W, theme::TOAST_H, theme::TOAST_BG);
-    renderer.drawRectFilled(x, y, theme::TOAST_BORDER_W, theme::TOAST_H, palette.border);
+    // Rounded background
+    renderer.drawRoundedRectFilled(x, y, theme::TOAST_W, theme::TOAST_H, r, theme::TOAST_BG);
+    // Left accent bar: clip to toast rect so it stays within rounded bounds
+    renderer.setClipRect(x, y, theme::TOAST_BORDER_W + r, theme::TOAST_H);
+    renderer.drawRoundedRectFilled(x, y, theme::TOAST_BORDER_W + r * 2, theme::TOAST_H, r,
+                                   palette.border);
+    renderer.clearClipRect();
 
     int textX = x + theme::PADDING + theme::TOAST_BORDER_W;
     if (detail.empty()) {

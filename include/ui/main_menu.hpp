@@ -30,7 +30,6 @@ enum class MenuCommand {
 /// Per-frame UI state for the bottom sheet (filled by Application).
 struct MainMenuState {
     std::string contextLine;
-    SDL_Texture* contextIcon = nullptr;
 
     bool disableSelectToggle = false;
     bool disableRename       = false;

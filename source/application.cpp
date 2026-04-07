@@ -159,17 +159,7 @@ static void renderFooter(Renderer& renderer, FontManager& fontManager, const I18
     }
 }
 
-enum class PendingConfirm { None, DeleteItems, OverwritePaste };
-
-struct PasteController {
-    std::vector<std::pair<std::string, std::string>> queue;
-    size_t                                           index = 0;
-    bool                                             isCut = false;
-    bool                                             running = false;
-    std::string                                      pasteTargetDir;
-    int                                              savedCursor = 0;
-    std::pair<std::string, std::string>              overwriteJob;
-};
+enum class PendingConfirm { None, DeleteItems };
 
 } // namespace
 
@@ -223,8 +213,6 @@ int Application::run(int argc, char* argv[]) {
     std::string              savedDeleteDir;
     int                      savedDeleteCursor = 0;
 
-    PasteController pasteCtrl;
-
     bool appQuit = false;
 
     auto activeRef = [&]() -> PanelState& {
@@ -254,44 +242,23 @@ int Application::run(int argc, char* argv[]) {
             st.disableCopy = st.disableCut = st.disablePaste = true;
             st.disableViewClip = st.disableClearClip = true;
             st.disableSettings = st.disableHelp = st.disableAbout = st.disableExit = false;
-            st.contextLine   = i18n.t("menu.context_root");
-            st.contextIcon   = findIcon(icons, "folder");
+            char ctxBuf[256];
+            snprintf(ctxBuf, sizeof(ctxBuf), "%s %s", i18n.t("menu.context_current"), i18n.t("menu.context_root"));
+            st.contextLine = ctxBuf;
             return;
         }
 
+        // Context line: "当前: path"
+        {
+            char ctxBuf[256];
+            snprintf(ctxBuf, sizeof(ctxBuf), "%s %s", i18n.t("menu.context_current"), a.path.c_str());
+            st.contextLine = ctxBuf;
+        }
+
         int nSel = al.selectionCount();
-        const auto& items = al.getItems();
+        // const auto& items = al.getItems();
         const ListItem* cur = al.getSelectedItem();
         bool onGoUp         = cur && cur->label == "..";
-
-        int nFile = 0, nDir = 0;
-        for (int i = 0; i < (int)items.size(); i++) {
-            if (!al.isSelected(i)) continue;
-            if (items[i].label == "..") continue;
-            if (items[i].action == ACTION_ENTER)
-                nDir++;
-            else
-                nFile++;
-        }
-
-        if (nSel == 0 && cur) {
-            st.contextLine = cur->label;
-            st.contextIcon =
-                cur->icon ? cur->icon : (onGoUp ? findIcon(icons, "back") : findIcon(icons, "file"));
-        } else if (nSel == 1) {
-            for (int i = 0; i < (int)items.size(); i++) {
-                if (al.isSelected(i)) {
-                    st.contextLine = items[i].label;
-                    st.contextIcon = items[i].icon ? items[i].icon : findIcon(icons, "file");
-                    break;
-                }
-            }
-        } else if (nSel > 1) {
-            char buf[128];
-            snprintf(buf, sizeof(buf), i18n.t("menu.context_multi_fmt"), nFile, nDir);
-            st.contextLine = buf;
-            st.contextIcon = findIcon(icons, "file");
-        }
 
         st.disableSelectToggle = onGoUp;
         st.disableRename =
@@ -299,7 +266,7 @@ int Application::run(int argc, char* argv[]) {
         st.disableNewFolder = false;
 
         bool canDelete = false;
-        if (nSel > 0 && (nFile + nDir) > 0) canDelete = true;
+        if (nSel > 0) canDelete = true;
         if (nSel == 0 && cur && !onGoUp) canDelete = true;
         st.disableDelete = !canDelete;
 
@@ -314,6 +281,43 @@ int Application::run(int argc, char* argv[]) {
         st.disableViewClip  = clipEmpty;
         st.disableClearClip = clipEmpty;
         st.disableSettings = st.disableHelp = st.disableAbout = st.disableExit = false;
+    };
+
+    auto renderScene = [&]() {
+        int panelY_ = theme::HEADER_H;
+        int panelH_ = theme::PANEL_CONTENT_H;
+        float lwf   = anim.currentLeftW();
+        int lw      = static_cast<int>(lwf);
+        int rw      = theme::SCREEN_W - lw;
+        int rx      = lw;
+        renderer.clear(theme::BG);
+        renderer.drawRectFilled(0, 0, theme::SCREEN_W, theme::HEADER_H, theme::HEADER_BG);
+        fontManager.drawText(renderer.sdl(), "Xplore", theme::PADDING,
+                             (theme::HEADER_H - theme::FONT_SIZE_TITLE) / 2,
+                             theme::FONT_SIZE_TITLE, theme::PRIMARY);
+        renderer.drawRectFilled(0, theme::HEADER_H - 1, theme::SCREEN_W, 1, theme::DIVIDER);
+        renderer.setClipRect(0, panelY_, lw, panelH_);
+        renderer.drawTexture(leftPanel.list.getCachedTexture(), 0, panelY_,
+                             theme::ACTIVE_PANEL_W, panelH_);
+        renderer.clearClipRect();
+        if (activePanel != PANEL_LEFT)
+            renderer.drawRectFilled(0, panelY_, lw, panelH_, theme::MASK_OVERLAY);
+        renderer.drawRectFilled(rx - 1, panelY_, 2, panelH_, theme::DIVIDER);
+        renderer.setClipRect(rx, panelY_, rw, panelH_);
+        renderer.drawTexture(rightPanel.list.getCachedTexture(), rx, panelY_,
+                             theme::ACTIVE_PANEL_W, panelH_);
+        renderer.clearClipRect();
+        if (activePanel != PANEL_RIGHT)
+            renderer.drawRectFilled(rx, panelY_, rw, panelH_, theme::MASK_OVERLAY);
+    };
+
+    auto pumpProgress = [&]() {
+        renderScene();
+        int scrimH = theme::HEADER_H + theme::PANEL_CONTENT_H;
+        renderer.drawRectFilled(0, 0, theme::SCREEN_W, scrimH, theme::MENU_SCRIM_CONTENT);
+        renderFooter(renderer, fontManager, i18n);
+        modalProgress.render(renderer, fontManager);
+        renderer.present();
     };
 
     while (appletMainLoop()) {
@@ -335,7 +339,7 @@ int Application::run(int argc, char* argv[]) {
         if (kDown & HidNpadButton_Plus) {
             if (mainMenu.isOpen())
                 mainMenu.close();
-            else if (!modalBlocking && !pasteCtrl.running)
+            else if (!modalBlocking)
                 mainMenu.open();
         }
 
@@ -346,35 +350,29 @@ int Application::run(int argc, char* argv[]) {
                     modalConfirm.close();
                     pendingConfirm = PendingConfirm::None;
                     modalProgress.open(i18n.t("progress.deleting"), "");
+                    bool delErr = false;
+                    std::string delLastErr;
                     for (const auto& p : pendingDeletePaths) {
                         modalProgress.setDetail(p);
+                        pumpProgress();
                         std::string err;
-                        fs::removeAll(p, err);
+                        if (!fs::removeAll(p, err)) {
+                            delErr = true;
+                            delLastErr = err;
+                        }
                     }
                     modalProgress.close();
                     refreshPath(savedDeleteDir, savedDeleteCursor);
                     pendingDeletePaths.clear();
-                } else if (pendingConfirm == PendingConfirm::OverwritePaste) {
-                    modalConfirm.close();
-                    pendingConfirm = PendingConfirm::None;
-                    std::string err;
-                    bool ok = pasteCtrl.isCut
-                                  ? fs::moveEntry(pasteCtrl.overwriteJob.first,
-                                                  pasteCtrl.overwriteJob.second, true, err)
-                                  : fs::copyEntry(pasteCtrl.overwriteJob.first,
-                                                  pasteCtrl.overwriteJob.second, true, err);
-                    if (!ok)
-                        toast.show(i18n.t("error.operation_failed"), err.c_str(), ToastKind::Error, 3000);
-                    pasteCtrl.index++;
+                    if (delErr)
+                        toast.show(i18n.t("error.operation_failed"), delLastErr.c_str(), ToastKind::Error, 3000);
+                    else
+                        toast.show(i18n.t("toast.deleted"), "", ToastKind::Success, 2200);
                 }
             } else if (cr == ConfirmResult::Cancelled) {
-                PendingConfirm pc = pendingConfirm;
                 modalConfirm.close();
                 pendingConfirm = PendingConfirm::None;
-                if (pc == PendingConfirm::OverwritePaste)
-                    pasteCtrl.index++;
-                else if (pc == PendingConfirm::DeleteItems)
-                    pendingDeletePaths.clear();
+                pendingDeletePaths.clear();
             }
         }
 
@@ -382,42 +380,7 @@ int Application::run(int argc, char* argv[]) {
             if (modalInfo.handleInput(kDown) != ConfirmResult::None) modalInfo.close();
         }
 
-        // Paste step (when not waiting on modal)
-        if (pasteCtrl.running && !modalConfirm.isOpen() && !modalProgress.isOpen()) {
-            if (pasteCtrl.index >= pasteCtrl.queue.size()) {
-                clipboard.clear();
-                refreshPath(pasteCtrl.pasteTargetDir, pasteCtrl.savedCursor);
-                toast.show(i18n.t("toast.pasted"), "", ToastKind::Success, 2200);
-                pasteCtrl.running = false;
-                pasteCtrl.queue.clear();
-                pasteCtrl.index = 0;
-            } else {
-                const auto& job = pasteCtrl.queue[pasteCtrl.index];
-                if (fs::pathExists(job.second)) {
-                    if (!modalConfirm.isOpen() && pendingConfirm == PendingConfirm::None) {
-                        char line[384];
-                        snprintf(line, sizeof(line), "%s\n%s", i18n.t("confirm.overwrite_body"),
-                                 job.second.c_str());
-                        modalConfirm.open(i18n.t("confirm.overwrite_title"), line);
-                        pendingConfirm         = PendingConfirm::OverwritePaste;
-                        pasteCtrl.overwriteJob = job;
-                    }
-                } else {
-                    modalProgress.open(pasteCtrl.isCut ? i18n.t("progress.moving")
-                                                       : i18n.t("progress.copying"),
-                                       job.second.c_str());
-                    std::string err;
-                    bool ok = pasteCtrl.isCut ? fs::moveEntry(job.first, job.second, false, err)
-                                              : fs::copyEntry(job.first, job.second, false, err);
-                    modalProgress.close();
-                    if (!ok)
-                        toast.show(i18n.t("error.operation_failed"), err.c_str(), ToastKind::Error, 3000);
-                    pasteCtrl.index++;
-                }
-            }
-        }
-
-        if (!modalBlocking && !menuBlocking && !pasteCtrl.running) {
+        if (!modalBlocking && !menuBlocking) {
             if (!anim.isAnimating()) {
                 if ((kDown & HidNpadButton_L) && activePanel != PANEL_LEFT) {
                     activePanel = PANEL_LEFT;
@@ -552,15 +515,43 @@ int Application::run(int argc, char* argv[]) {
                     toast.show(i18n.t("error.operation_failed"), i18n.t("error.paste_forbidden"), ToastKind::Warning, 3200);
                     break;
                 }
-                pasteCtrl.queue.clear();
-                for (const auto& e : clipboard.items())
-                    pasteCtrl.queue.push_back({e.fullPath, fs::joinPath(active.path, e.name)});
-                pasteCtrl.index          = 0;
-                pasteCtrl.isCut          = (clipboard.operation() == fs::ClipboardOp::Cut);
-                pasteCtrl.running        = true;
-                pasteCtrl.pasteTargetDir = active.path;
-                pasteCtrl.savedCursor    = activeList.getCursor();
+                bool isCut = (clipboard.operation() == fs::ClipboardOp::Cut);
+                std::string destDir = active.path;
+                int savedCursor = activeList.getCursor();
                 mainMenu.close();
+
+                bool anyError = false;
+                std::string lastErr;
+
+                const char* progressTitle = isCut ? i18n.t("progress.moving")
+                                                   : i18n.t("progress.copying");
+                modalProgress.open(progressTitle, "");
+                auto onProgress = [&](const std::string& currentFile) {
+                    modalProgress.setDetail(currentFile);
+                    pumpProgress();
+                };
+                for (const auto& e : clipboard.items()) {
+                    std::string src = e.fullPath;
+                    std::string dst = fs::joinPath(destDir, e.name);
+                    bool overwrite = fs::pathExists(dst);
+                    modalProgress.setDetail(e.name);
+                    pumpProgress();
+                    std::string err;
+                    bool ok = isCut
+                        ? fs::moveEntryWithProgress(src, dst, overwrite, err, onProgress)
+                        : fs::copyEntryWithProgress(src, dst, overwrite, err, onProgress);
+                    if (!ok) {
+                        anyError = true;
+                        lastErr = err;
+                    }
+                }
+                modalProgress.close();
+                clipboard.clear();
+                refreshPath(destDir, savedCursor);
+                if (anyError)
+                    toast.show(i18n.t("error.operation_failed"), lastErr.c_str(), ToastKind::Error, 3000);
+                else
+                    toast.show(i18n.t("toast.pasted"), "", ToastKind::Success, 2200);
                 break;
             }
             case MenuCommand::Delete: {
@@ -665,54 +656,21 @@ int Application::run(int argc, char* argv[]) {
         toast.update(delta);
         anim.update(delta);
 
-        int panelY = theme::HEADER_H;
-        int panelH = theme::PANEL_CONTENT_H;
-        leftPanel.list.updateCache(renderer, fontManager, theme::ACTIVE_PANEL_W, panelH);
-        rightPanel.list.updateCache(renderer, fontManager, theme::ACTIVE_PANEL_W, panelH);
+        leftPanel.list.updateCache(renderer, fontManager, theme::ACTIVE_PANEL_W,
+                                   theme::PANEL_CONTENT_H);
+        rightPanel.list.updateCache(renderer, fontManager, theme::ACTIVE_PANEL_W,
+                                    theme::PANEL_CONTENT_H);
 
-        renderer.clear(theme::BG);
-        renderer.drawRectFilled(0, 0, theme::SCREEN_W, theme::HEADER_H, theme::HEADER_BG);
-        fontManager.drawText(renderer.sdl(), "Xplore", theme::PADDING,
-                             (theme::HEADER_H - theme::FONT_SIZE_TITLE) / 2, theme::FONT_SIZE_TITLE,
-                             theme::PRIMARY);
-        renderer.drawRectFilled(0, theme::HEADER_H - 1, theme::SCREEN_W, 1, theme::DIVIDER);
+        renderScene();
 
-        float leftWf = anim.currentLeftW();
-        int leftW    = static_cast<int>(leftWf);
-        int rightW   = theme::SCREEN_W - leftW;
-        int rightX   = leftW;
-
-        renderer.setClipRect(0, panelY, leftW, panelH);
-        renderer.drawTexture(leftPanel.list.getCachedTexture(), 0, panelY, theme::ACTIVE_PANEL_W,
-                             panelH);
-        renderer.clearClipRect();
-        if (activePanel != PANEL_LEFT)
-            renderer.drawRectFilled(0, panelY, leftW, panelH, theme::MASK_OVERLAY);
-
-        renderer.drawRectFilled(rightX - 1, panelY, 2, panelH, theme::DIVIDER);
-
-        renderer.setClipRect(rightX, panelY, rightW, panelH);
-        renderer.drawTexture(rightPanel.list.getCachedTexture(), rightX, panelY, theme::ACTIVE_PANEL_W,
-                             panelH);
-        renderer.clearClipRect();
-        if (activePanel != PANEL_RIGHT)
-            renderer.drawRectFilled(rightX, panelY, rightW, panelH, theme::MASK_OVERLAY);
-
-        const bool strongDimModal =
-            modalConfirm.isOpen() || modalProgress.isOpen();
-        const bool lightBackdrop =
-            !strongDimModal && (mainMenu.isOpen() || modalInfo.isOpen());
-        if (lightBackdrop) {
+        const bool anyOverlay =
+            mainMenu.isOpen() || modalConfirm.isOpen() || modalProgress.isOpen() || modalInfo.isOpen();
+        if (anyOverlay) {
             int scrimH = theme::HEADER_H + theme::PANEL_CONTENT_H;
             renderer.drawRectFilled(0, 0, theme::SCREEN_W, scrimH, theme::MENU_SCRIM_CONTENT);
         }
 
         renderFooter(renderer, fontManager, i18n);
-
-        if (strongDimModal) {
-            renderer.drawRectFilled(0, 0, theme::SCREEN_W, theme::SCREEN_H, theme::MENU_OVERLAY);
-            renderer.drawRectFilled(0, 0, theme::SCREEN_W, theme::SCREEN_H, theme::MENU_DIM_EXTRA);
-        }
 
         if (mainMenu.isOpen()) mainMenu.render(renderer, fontManager, i18n, menuSt);
         modalConfirm.render(renderer, fontManager, i18n);

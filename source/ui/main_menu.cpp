@@ -185,41 +185,63 @@ void BottomMainMenu::render(Renderer& renderer, FontManager& fm, const I18n& i18
     float t    = easeOutCubic(anim_);
     int mx     = MENU_SHEET_MARGIN_X;
     int mw     = SCREEN_W - mx * 2;
-    int sh     = MENU_SHEET_TITLE_H + MENU_SHEET_CONTEXT_H + MENU_SHEET_ROWS * MENU_SHEET_CELL_H +
-             MENU_PADDING * 2;
+    int sh     = MENU_SHEET_TITLE_H + MENU_SHEET_CONTEXT_H + 1 +
+             MENU_SHEET_ROWS * MENU_SHEET_CELL_H + MENU_PADDING * 2;
     // Keep bottom tips bar visible; sheet ends above FOOTER_H.
     int y0     = SCREEN_H - FOOTER_H - sh;
     int slide  = static_cast<int>(static_cast<float>(sh + 40) * (1.0f - t));
     int y      = y0 + slide;
 
+    // --- Sheet background with subtle shadow ---
+    // Shadow layer (offset down, slightly larger, semi-transparent)
+    constexpr SDL_Color SHADOW = {0x00, 0x00, 0x00, 0x40};
+    renderer.drawRoundedRectFilled(mx + 2, y + 3, mw, sh, MENU_RADIUS, SHADOW);
+    // Main card
     renderer.drawRoundedRectFilled(mx, y, mw, sh, MENU_RADIUS, MENU_BG);
     renderer.drawRoundedRect(mx, y, mw, sh, MENU_RADIUS, MENU_BORDER);
 
     int tx = mx + MENU_PADDING;
     int ty = y + MENU_PADDING;
+
+    // --- Title row ---
     char hdr[160];
     snprintf(hdr, sizeof(hdr), "%s   %s", i18n.t("menu.title"), i18n.t("menu.hints"));
     fm.drawText(renderer.sdl(), hdr, tx, ty, FONT_SIZE_SMALL, TEXT_SECONDARY);
     ty += MENU_SHEET_TITLE_H;
 
+    // --- Context row (current folder) ---
     int ctxY = ty;
     int ctxInnerW = mw - MENU_PADDING * 2;
+    // Context row background — subtle surface tint so it stands out
+    renderer.drawRoundedRectFilled(mx + MENU_PADDING, ctxY, ctxInnerW, MENU_SHEET_CONTEXT_H, 8,
+                                   SURFACE);
     if (focusRow_ == 1) {
         renderer.drawRoundedRectFilled(mx + MENU_PADDING, ctxY, ctxInnerW, MENU_SHEET_CONTEXT_H, 8,
                                        CURSOR_ROW);
+        renderer.drawRoundedRect(mx + MENU_PADDING, ctxY, ctxInnerW, MENU_SHEET_CONTEXT_H, 8,
+                                 PRIMARY_DIM);
     }
-    if (st.contextIcon)
-        renderer.drawTexture(st.contextIcon, tx, ctxY + (MENU_SHEET_CONTEXT_H - ICON_SIZE) / 2,
-                             ICON_SIZE, ICON_SIZE);
-    int textX = tx + ICON_SIZE + PADDING_SM;
+    int textX = tx + PADDING_SM;
     SDL_Color ctxCol = (focusRow_ == 1) ? PRIMARY : TEXT;
     fm.drawTextEllipsis(renderer.sdl(), st.contextLine.c_str(), textX,
                         ctxY + (MENU_SHEET_CONTEXT_H - FONT_SIZE_ITEM) / 2, FONT_SIZE_ITEM, ctxCol,
-                        mw - textX - MENU_PADDING);
+                        mw - MENU_PADDING * 2 - PADDING_SM * 2);
     ty += MENU_SHEET_CONTEXT_H;
 
+    // --- Divider below context row ---
+    int divX1 = mx + MENU_PADDING + 4;
+    int divX2 = mx + mw - MENU_PADDING - 4;
+    renderer.drawLine(divX1, ty, divX2, ty, DIVIDER);
+    ty += 1;
+
+    // --- Grid cells ---
     int cellW = (mw - MENU_PADDING * 2) / 4;
     for (int row = 2; row <= 5; row++) {
+        // Divider between row groups (before rows 3, 4, 5)
+        if (row > 2) {
+            int divY = ty + (row - 2) * MENU_SHEET_CELL_H;
+            renderer.drawLine(divX1, divY, divX2, divY, DIVIDER);
+        }
         for (int col = 0; col < 4; col++) {
             int cx = mx + MENU_PADDING + col * cellW;
             int cy = ty + (row - 2) * MENU_SHEET_CELL_H;
@@ -228,10 +250,12 @@ void BottomMainMenu::render(Renderer& renderer, FontManager& fm, const I18n& i18
             if (foc) {
                 renderer.drawRoundedRectFilled(cx + 2, cy + 2, cellW - 4, MENU_SHEET_CELL_H - 4, 8,
                                                CURSOR_ROW);
+                renderer.drawRoundedRect(cx + 2, cy + 2, cellW - 4, MENU_SHEET_CELL_H - 4, 8,
+                                         PRIMARY_DIM);
             }
             const char* key = labelKey(row, col);
             if (!key || !key[0]) continue;
-            SDL_Color colr = dis ? TEXT_DISABLED : (foc ? TEXT : MENU_ITEM_TEXT);
+            SDL_Color colr = dis ? TEXT_DISABLED : (foc ? PRIMARY : MENU_ITEM_TEXT);
             fm.drawTextEllipsis(renderer.sdl(), i18n.t(key), cx + 8,
                                 cy + (MENU_SHEET_CELL_H - FONT_SIZE_SMALL) / 2, FONT_SIZE_SMALL,
                                 colr, cellW - 16);

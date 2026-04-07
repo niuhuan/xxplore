@@ -1,5 +1,6 @@
 #pragma once
 #include <cstdint>
+#include <functional>
 #include <string>
 #include <vector>
 
@@ -58,6 +59,17 @@ bool copyEntry(const std::string& src, const std::string& dst, bool overwrite,
 /// Rename, or copy+remove if rename fails (e.g. cross-device).
 bool moveEntry(const std::string& src, const std::string& dst, bool overwrite,
                std::string& errOut);
+
+/// Callback invoked before each file/dir copy. Argument is the destination path.
+using ProgressCallback = std::function<void(const std::string& currentFile)>;
+
+/// Copy file or directory tree with per-file progress callback.
+bool copyEntryWithProgress(const std::string& src, const std::string& dst, bool overwrite,
+                           std::string& errOut, const ProgressCallback& onProgress);
+
+/// Move entry with per-file progress callback (rename or copy+remove fallback).
+bool moveEntryWithProgress(const std::string& src, const std::string& dst, bool overwrite,
+                           std::string& errOut, const ProgressCallback& onProgress);
 
 } // namespace fs
 } // namespace xplore
