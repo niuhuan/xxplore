@@ -51,6 +51,7 @@ void Renderer::present() {
 }
 
 void Renderer::drawRectFilled(int x, int y, int w, int h, SDL_Color c) {
+    SDL_SetRenderDrawBlendMode(sdlRenderer, SDL_BLENDMODE_BLEND);
     SDL_SetRenderDrawColor(sdlRenderer, c.r, c.g, c.b, c.a);
     SDL_Rect rect = {x, y, w, h};
     SDL_RenderFillRect(sdlRenderer, &rect);

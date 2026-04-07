@@ -669,7 +669,6 @@ int Application::run(int argc, char* argv[]) {
             int scrimH = theme::HEADER_H + theme::PANEL_CONTENT_H;
             renderer.drawRectFilled(0, 0, theme::SCREEN_W, scrimH, theme::MENU_SCRIM_CONTENT);
         }
-
         renderFooter(renderer, fontManager, i18n);
 
         if (mainMenu.isOpen()) mainMenu.render(renderer, fontManager, i18n, menuSt);
