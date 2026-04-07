@@ -11,6 +11,7 @@
 #include "ui/file_list.hpp"
 #include "ui/toast.hpp"
 #include "fs/fs_api.hpp"
+#include "i18n/i18n.hpp"
 
 enum { ACTION_NONE = 0, ACTION_ENTER, ACTION_GO_UP };
 enum ActivePanel { PANEL_LEFT, PANEL_RIGHT };
@@ -83,8 +84,6 @@ static SDL_Texture* findIcon(const std::vector<IconEntry>& icons, const char* na
 
 // --------------- build list items from directory ---------------
 
-/// Convert fs entries into ListItems with appropriate icons.
-/// Prepends ".." (go-up) entry if we're not at the virtual root.
 static std::vector<xplore::ListItem> buildItemsForPath(
     const std::string& path,
     const std::vector<IconEntry>& icons)
@@ -102,7 +101,6 @@ static std::vector<xplore::ListItem> buildItemsForPath(
         return items;
     }
 
-    // ".." entry to go up
     items.push_back({"..", findIcon(icons, "back"), ACTION_GO_UP});
 
     auto entries = xplore::fs::listDir(path);
@@ -114,14 +112,72 @@ static std::vector<xplore::ListItem> buildItemsForPath(
     return items;
 }
 
-/// Navigate a panel to a new path. Reads directory and updates list.
 static void navigatePanel(PanelState& panel,
                           const std::string& newPath,
                           const std::vector<IconEntry>& icons) {
     panel.path = newPath;
-    panel.list.setItems(buildItemsForPath(newPath, icons));
-    printf("Navigate: %s (%d items)\n", newPath.c_str(),
-           static_cast<int>(panel.list.getItems().size()));
+    bool hasGoUp = !xplore::fs::isVirtualRoot(newPath);
+    bool allowSel = xplore::fs::pathAllowsSelection(newPath);
+    // setItems clears selection and scroll; path change always drops prior picks
+    panel.list.setItems(buildItemsForPath(newPath, icons), hasGoUp, allowSel);
+    printf("Navigate: %s (%d items, sel=%d)\n", newPath.c_str(),
+           static_cast<int>(panel.list.getItems().size()), allowSel ? 1 : 0);
+}
+
+// --------------- footer rendering ---------------
+
+struct FooterTip {
+    const char* button;
+    const char* i18nKey;
+};
+
+static void renderFooter(xplore::Renderer& renderer,
+                         xplore::FontManager& fontManager,
+                         const xplore::I18n& i18n) {
+    using namespace xplore::theme;
+
+    int footerY = HEADER_H + PANEL_CONTENT_H;
+    renderer.drawRectFilled(0, footerY, SCREEN_W, FOOTER_H, HEADER_BG);
+    renderer.drawRectFilled(0, footerY, SCREEN_W, 1, DIVIDER);
+
+    static const FooterTip tips[] = {
+        {"A", "footer.a"},
+        {"B", "footer.b"},
+        {"Y", "footer.y"},
+        {"X", "footer.x"},
+        {"+", "footer.plus"},
+    };
+    constexpr int numTips = 5;
+    constexpr int spacing = 32;
+
+    const char* actions[numTips];
+    int totalW = 0;
+    for (int i = 0; i < numTips; i++) {
+        actions[i] = i18n.t(tips[i].i18nKey);
+        totalW += fontManager.measureText(tips[i].button, FONT_SIZE_FOOTER);
+        totalW += fontManager.measureText(":", FONT_SIZE_FOOTER);
+        totalW += fontManager.measureText(actions[i], FONT_SIZE_FOOTER);
+    }
+    totalW += spacing * (numTips - 1);
+
+    int x = (SCREEN_W - totalW) / 2;
+    int y = footerY + (FOOTER_H - FONT_SIZE_FOOTER) / 2 + 1;
+
+    for (int i = 0; i < numTips; i++) {
+        fontManager.drawText(renderer.sdl(), tips[i].button,
+                             x, y, FONT_SIZE_FOOTER, PRIMARY);
+        x += fontManager.measureText(tips[i].button, FONT_SIZE_FOOTER);
+
+        fontManager.drawText(renderer.sdl(), ":",
+                             x, y, FONT_SIZE_FOOTER, TEXT_SECONDARY);
+        x += fontManager.measureText(":", FONT_SIZE_FOOTER);
+
+        fontManager.drawText(renderer.sdl(), actions[i],
+                             x, y, FONT_SIZE_FOOTER, TEXT_SECONDARY);
+        x += fontManager.measureText(actions[i], FONT_SIZE_FOOTER);
+
+        x += spacing;
+    }
 }
 
 // --------------- main ---------------
@@ -145,6 +201,9 @@ int main(int argc, char* argv[]) {
     bool ok = renderer.init();
     if (ok) ok = fontManager.init("romfs:/fonts/xplore.ttf");
 
+    xplore::I18n i18n;
+    if (ok) i18n.load("romfs:/i18n/en.ini");
+
     std::vector<IconEntry> icons;
     if (ok) icons = loadIcons(renderer);
 
@@ -164,6 +223,7 @@ int main(int argc, char* argv[]) {
         anim.targetLeftW = static_cast<float>(ACTIVE_PANEL_W);
         anim.startLeftW  = anim.targetLeftW;
 
+        const int pageItems = PANEL_CONTENT_H / ITEM_H;
         uint32_t lastTick = SDL_GetTicks();
 
         while (appletMainLoop()) {
@@ -195,18 +255,23 @@ int main(int argc, char* argv[]) {
                 (activePanel == PANEL_LEFT) ? leftPanel : rightPanel;
             xplore::FileList& activeList = active.list;
 
+            // Cursor movement
             if (kDown & HidNpadButton_AnyUp)
                 activeList.moveCursorUp();
             if (kDown & HidNpadButton_AnyDown)
                 activeList.moveCursorDown();
+            if (kDown & HidNpadButton_AnyLeft)
+                activeList.moveCursorPageUp(pageItems);
+            if (kDown & HidNpadButton_AnyRight)
+                activeList.moveCursorPageDown(pageItems);
 
+            // A = enter directory / go up
             if (kDown & HidNpadButton_A) {
                 auto* item = activeList.getSelectedItem();
                 if (item) {
                     if (item->action == ACTION_ENTER) {
                         std::string target;
                         if (xplore::fs::isVirtualRoot(active.path)) {
-                            // Root entry like "sdmc:" → "sdmc:/"
                             target = item->label + "/";
                         } else {
                             target = xplore::fs::joinPath(active.path, item->label);
@@ -219,12 +284,22 @@ int main(int argc, char* argv[]) {
                 }
             }
 
-            // B = go up in active panel
+            // B = go up
             if (kDown & HidNpadButton_B) {
                 if (!xplore::fs::isVirtualRoot(active.path)) {
                     std::string parent = xplore::fs::parentPath(active.path);
                     navigatePanel(active, parent, icons);
                 }
+            }
+
+            // Y = toggle selection on current item, advance cursor
+            if (kDown & HidNpadButton_Y) {
+                activeList.toggleSelect();
+            }
+
+            // X = select all / deselect all
+            if (kDown & HidNpadButton_X) {
+                activeList.toggleSelectAll();
             }
 
             toast.update(delta);
@@ -270,6 +345,9 @@ int main(int argc, char* argv[]) {
             renderer.clearClipRect();
             if (activePanel != PANEL_RIGHT)
                 renderer.drawRectFilled(rightX, panelY, rightW, panelH, MASK_OVERLAY);
+
+            // Footer
+            renderFooter(renderer, fontManager, i18n);
 
             toast.render(renderer, fontManager);
             renderer.present();

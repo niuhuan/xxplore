@@ -37,10 +37,11 @@ constexpr SDL_Color MENU_ITEM_TEXT  = {0xe0, 0xe0, 0xe0, 0xff};
 constexpr int SCREEN_W         = 1280;
 constexpr int SCREEN_H         = 720;
 constexpr int HEADER_H         = 50;
+constexpr int FOOTER_H         = 32;   ///< Bottom button-tips bar height
 constexpr int ITEM_H           = 56;   ///< Row height for file items / list items
 constexpr int INACTIVE_PANEL_W = 50;
 constexpr int ACTIVE_PANEL_W   = SCREEN_W - INACTIVE_PANEL_W;
-constexpr int PANEL_CONTENT_H  = SCREEN_H - HEADER_H;
+constexpr int PANEL_CONTENT_H  = SCREEN_H - HEADER_H - FOOTER_H;
 constexpr int ICON_SIZE        = 32;   ///< File-type icon dimensions (square)
 constexpr int CHECKBOX_SIZE    = 24;
 constexpr int PADDING          = 12;
@@ -50,6 +51,7 @@ constexpr int PADDING_SM       = 8;
 constexpr int FONT_SIZE_TITLE  = 20;
 constexpr int FONT_SIZE_ITEM   = 18;
 constexpr int FONT_SIZE_SMALL  = 14;
+constexpr int FONT_SIZE_FOOTER = 12;   ///< Footer button-tips font size
 
 // --- Menu ---
 constexpr int MENU_W           = 400;

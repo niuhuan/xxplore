@@ -9,6 +9,23 @@
 namespace xplore {
 namespace fs {
 
+bool pathAllowsSelection(const std::string& path) {
+    if (isVirtualRoot(path))
+        return false;
+    // Extend this list when WebDAV/SMB/etc. mounts are implemented.
+    static const char* kWritableMountPrefixes[] = {
+        "sdmc:/",
+        // "webdav:/",
+        // "smb:/",
+    };
+    for (const char* pre : kWritableMountPrefixes) {
+        size_t n = strlen(pre);
+        if (path.size() >= n && path.compare(0, n, pre) == 0)
+            return true;
+    }
+    return false;
+}
+
 std::vector<FileEntry> getRootEntries() {
     return {{"sdmc:", true, 0}};
 }

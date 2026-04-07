@@ -23,6 +23,7 @@ PATTERNS = [
     "source/**/*.hpp",
     "include/**/*.hpp",
     "include/**/*.h",
+    "romfs/i18n/*.ini",
 ]
 
 

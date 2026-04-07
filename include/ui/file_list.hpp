@@ -1,5 +1,6 @@
 #pragma once
 #include <SDL.h>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -16,45 +17,56 @@ struct ListItem {
     int          action = 0;
 };
 
-/// Scrollable vertical list of ListItems with off-screen render caching.
-/// Each instance maintains its own cursor, scroll offset, and a cached
-/// render-target texture that is only re-drawn when the dirty flag is set.
+/// Scrollable vertical list of ListItems with off-screen render caching,
+/// cursor navigation, page flip, and multi-selection support.
 class FileList {
 public:
     ~FileList();
 
-    /// Replace all items and reset cursor / scroll to the top. Marks dirty.
-    void setItems(std::vector<ListItem> newItems);
+    /// Replace all items and reset cursor / scroll / selection.
+    /// @param hasGoUpEntry     true when the first item is ".." (non-selectable)
+    /// @param selectionEnabled when false, Y/X selection is disabled (e.g. virtual root)
+    void setItems(std::vector<ListItem> newItems, bool hasGoUpEntry = false,
+                  bool selectionEnabled = true);
 
     const std::vector<ListItem>& getItems() const { return items; }
 
-    /// Move cursor up/down. Marks dirty.
+    // --- cursor movement ---
     void moveCursorUp();
     void moveCursorDown();
+    void moveCursorPageUp(int pageItems);
+    void moveCursorPageDown(int pageItems);
     int  getCursor() const { return cursor; }
 
     /// Return the item under the cursor, or nullptr if list is empty.
     const ListItem* getSelectedItem() const;
 
-    /// Force the cached texture to be re-drawn on the next updateCache() call.
-    void markDirty() { dirty = true; }
+    // --- multi-selection ---
+    /// Toggle current item's selection, then advance cursor (wrapping to 0).
+    void toggleSelect();
+    /// Select all / deselect all (excluding ".." entry).
+    void toggleSelectAll();
+    bool isSelected(int index) const { return selection.count(index) > 0; }
+    int  selectionCount() const { return static_cast<int>(selection.size()); }
+    bool hasSelection() const { return !selection.empty(); }
+    bool allSelected() const;
+    void clearSelection();
 
-    /// Re-render the list content into the internal render-target texture.
-    /// Only performs work when the dirty flag is set or the cache size changed.
-    /// Renders at (0,0) origin; caller positions the texture during compositing.
+    // --- render cache ---
+    void markDirty() { dirty = true; }
     void updateCache(Renderer& renderer, FontManager& fontManager,
                      int width, int height);
-
-    /// Return the cached off-screen texture for compositing onto the screen.
     SDL_Texture* getCachedTexture() const { return cachedTex; }
-
-    /// Release the cached render-target texture (e.g. before shutdown).
     void destroyCache();
 
 private:
     std::vector<ListItem> items;
     int cursor    = 0;
     int scrollTop = 0;
+
+    int  firstSelectableIndex = 0;
+    bool selectionEnabled     = true;
+    std::set<int> selection;
 
     SDL_Texture* cachedTex = nullptr;
     bool dirty   = true;

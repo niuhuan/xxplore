@@ -17,6 +17,11 @@ inline bool isVirtualRoot(const std::string& path) {
     return path.empty() || path == "/";
 }
 
+/// True when the panel at @p path may use multi-select and local file ops.
+/// Virtual root is never allowed. Currently only SD card paths (`sdmc:/…`)
+/// return true; add WebDAV/SMB prefixes here when those mounts are wired up.
+bool pathAllowsSelection(const std::string& path);
+
 /// Return the root entries (currently only sdmc:).
 std::vector<FileEntry> getRootEntries();
 
