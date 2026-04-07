@@ -444,6 +444,11 @@ public:
                      "Failed to register placeholder");
     }
 
+    void Delete(const NcmContentId& registeredId) {
+        XP_ASSERT_OK(ncmContentStorageDelete(&contentStorage, &registeredId),
+                     "Failed to delete registered NCA");
+    }
+
     bool Has(const NcmContentId& registeredId) {
         bool hasNca = false;
         XP_ASSERT_OK(ncmContentStorageHas(&contentStorage, &hasNca, &registeredId),
@@ -1201,6 +1206,13 @@ struct StreamProgressContext {
 
 StreamProgressContext gStreamProgress {};
 
+NcmPlaceHolderId contentIdToPlaceholderId(const NcmContentId& contentId) {
+    NcmPlaceHolderId placeholderId {};
+    static_assert(sizeof(placeholderId) == sizeof(contentId), "Unexpected content/placeholder id size mismatch");
+    std::memcpy(&placeholderId, &contentId, sizeof(placeholderId));
+    return placeholderId;
+}
+
 void emitLog(const InstallBackendCallbacks& callbacks, const std::string& line) {
 #ifdef XPLORE_DEBUG
     std::printf("[install-log] %s\n", line.c_str());
@@ -1480,6 +1492,15 @@ protected:
             XP_THROW("NCA file not found in NSP");
 
         auto storage = std::make_shared<nxncm::ContentStorage>(destStorageId);
+        NcmPlaceHolderId stalePlaceholderId = contentIdToPlaceholderId(ncaId);
+        try {
+            if (storage->HasPlaceholder(stalePlaceholderId)) {
+                debugPrint("install", "cleanup stale placeholder for %s",
+                           util::GetNcaIdString(ncaId).c_str());
+                storage->DeletePlaceholder(stalePlaceholderId);
+            }
+        } catch (...) {}
+
         NcmPlaceHolderId placeholderId = storage->GeneratePlaceholderId();
         debugPrint("install", "generated placeholder for %s", util::GetNcaIdString(ncaId).c_str());
         package->StreamToPlaceholder(storage, placeholderId, ncaId);
@@ -1491,6 +1512,10 @@ protected:
             debugPrint("install", "register failed content=%s placeholder_exists=%d",
                        util::GetNcaIdString(ncaId).c_str(),
                        storage->HasPlaceholder(placeholderId) ? 1 : 0);
+            try {
+                if (gStreamProgress.callbacks && storage->Has(ncaId))
+                    emitLog(*gStreamProgress.callbacks, "Content already present: " + util::GetNcaIdString(ncaId));
+            } catch (...) {}
         }
         try { storage->DeletePlaceholder(placeholderId); } catch (...) {}
     }
@@ -1551,6 +1576,15 @@ protected:
             XP_THROW("NCA file not found in XCI");
 
         auto storage = std::make_shared<nxncm::ContentStorage>(destStorageId);
+        NcmPlaceHolderId stalePlaceholderId = contentIdToPlaceholderId(ncaId);
+        try {
+            if (storage->HasPlaceholder(stalePlaceholderId)) {
+                debugPrint("install", "cleanup stale placeholder for %s",
+                           util::GetNcaIdString(ncaId).c_str());
+                storage->DeletePlaceholder(stalePlaceholderId);
+            }
+        } catch (...) {}
+
         NcmPlaceHolderId placeholderId = storage->GeneratePlaceholderId();
         debugPrint("install", "generated placeholder for %s", util::GetNcaIdString(ncaId).c_str());
         package->StreamToPlaceholder(storage, placeholderId, ncaId);
@@ -1562,6 +1596,10 @@ protected:
             debugPrint("install", "register failed content=%s placeholder_exists=%d",
                        util::GetNcaIdString(ncaId).c_str(),
                        storage->HasPlaceholder(placeholderId) ? 1 : 0);
+            try {
+                if (gStreamProgress.callbacks && storage->Has(ncaId))
+                    emitLog(*gStreamProgress.callbacks, "Content already present: " + util::GetNcaIdString(ncaId));
+            } catch (...) {}
         }
         try { storage->DeletePlaceholder(placeholderId); } catch (...) {}
     }
@@ -1708,6 +1746,8 @@ bool runInstallQueue(const std::vector<InstallQueueItem>& items, bool installToN
         return true;
     } catch (const std::exception& e) {
         errOut = e.what();
+        if (callbacks.onLog)
+            callbacks.onLog("Partially installed contents can be removed from System Settings.");
         debugPrint("install", "queue failed err=%s", errOut.c_str());
         splExit();
         splCryptoExit();

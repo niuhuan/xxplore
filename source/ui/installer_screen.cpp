@@ -498,11 +498,14 @@ void InstallerScreen::render(Renderer& renderer, FontManager& fm, const I18n& i1
         fm.drawText(renderer.sdl(), i18n.t("installer.exit_hint"), x, cardY + cardH - 32,
                     theme::FONT_SIZE_SMALL, theme::TEXT_SECONDARY);
     } else if (state == State::Failed) {
+        fm.drawTextEllipsis(renderer.sdl(), i18n.t("installer.failed_cleanup_hint"), x,
+                            cardY + cardH - 52, theme::FONT_SIZE_SMALL, theme::TEXT_SECONDARY,
+                            cardW - 48);
         if (!errorMessage.empty()) {
-            fm.drawTextEllipsis(renderer.sdl(), errorMessage.c_str(), x + 220, cardY + cardH - 32,
+            fm.drawTextEllipsis(renderer.sdl(), errorMessage.c_str(), x + 220, cardY + cardH - 30,
                                 theme::FONT_SIZE_SMALL, theme::DANGER, cardW - 260);
         }
-        fm.drawText(renderer.sdl(), i18n.t("installer.failed_hint"), x, cardY + cardH - 32,
+        fm.drawText(renderer.sdl(), i18n.t("installer.failed_hint"), x, cardY + cardH - 30,
                     theme::FONT_SIZE_SMALL, theme::DANGER);
     }
 }
