@@ -13,6 +13,7 @@
 #include "ui/settings_screen.hpp"
 #include "ui/theme.hpp"
 #include "ui/toast.hpp"
+#include "ui/web_install_demo_screen.hpp"
 #include "util/app_config.hpp"
 
 #include <cstdio>
@@ -26,7 +27,7 @@ namespace xplore {
 
 namespace {
 
-enum { ACTION_NONE = 0, ACTION_ENTER, ACTION_GO_UP };
+enum { ACTION_NONE = 0, ACTION_ENTER, ACTION_GO_UP, ACTION_WEB_INSTALL_DEMO };
 enum ActivePanel { PANEL_LEFT, PANEL_RIGHT };
 
 struct IconEntry {
@@ -101,6 +102,9 @@ static std::vector<ListItem> buildItemsForPath(const std::string& path,
         auto roots = fs::getRootEntries();
         for (auto& r : roots)
             items.push_back({r.name, findIcon(icons, "folder"), ACTION_ENTER});
+#ifdef XPLORE_DEBUG
+        items.push_back({u8"启动安装服务器", findIcon(icons, "settings"), ACTION_WEB_INSTALL_DEMO});
+#endif
         return items;
     }
 
@@ -216,6 +220,7 @@ int Application::run(int argc, char* argv[]) {
     ImageViewer imageViewer;
     InstallerScreen installerScreen;
     SettingsScreen settingsScreen;
+    WebInstallDemoScreen webInstallDemoScreen;
 
     PanelState leftPanel;
     PanelState rightPanel;
@@ -513,12 +518,12 @@ int Application::run(int argc, char* argv[]) {
         bool modalBlocking =
             modalConfirm.isOpen() || modalChoice.isOpen() || modalProgress.isOpen() ||
             modalInfo.isOpen() || modalInstallPrompt.isOpen() || imageViewer.isOpen() ||
-            installerScreen.isOpen() || settingsScreen.isOpen();
+            installerScreen.isOpen() || settingsScreen.isOpen() || webInstallDemoScreen.isOpen();
         bool menuBlocking = mainMenu.isOpen();
 
         // Plus toggles menu
         if (kDown & HidNpadButton_Plus) {
-            if (installerScreen.isOpen() || imageViewer.isOpen()) {
+            if (installerScreen.isOpen() || imageViewer.isOpen() || webInstallDemoScreen.isOpen()) {
                 // Reserved for screen-specific handling below.
             } else if (mainMenu.isOpen())
                 mainMenu.close();
@@ -550,6 +555,12 @@ int Application::run(int argc, char* argv[]) {
                     }
                 }
             }
+        }
+
+        if (webInstallDemoScreen.isOpen()) {
+            WebInstallDemoAction action = webInstallDemoScreen.handleInput(kDown);
+            if (action == WebInstallDemoAction::Close)
+                webInstallDemoScreen.close();
         }
 
         if (installerScreen.isOpen()) {
@@ -708,6 +719,9 @@ int Application::run(int argc, char* argv[]) {
                         }
                     } else if (item->action == ACTION_GO_UP) {
                         navigatePanel(active, fs::parentPath(active.path), icons);
+                    } else if (item->action == ACTION_WEB_INSTALL_DEMO) {
+                        activeList.clearSelection();
+                        webInstallDemoScreen.open();
                     } else {
                         bool hasSelection    = activeList.hasSelection();
                         bool currentSelected = hasSelection && activeList.isSelected(activeList.getCursor());
@@ -987,11 +1001,13 @@ int Application::run(int argc, char* argv[]) {
         const bool anyOverlay =
             mainMenu.isOpen() || modalConfirm.isOpen() || modalChoice.isOpen()
             || modalProgress.isOpen() || modalInfo.isOpen() || modalInstallPrompt.isOpen();
-        if (anyOverlay && !imageViewer.isOpen() && !installerScreen.isOpen() && !settingsScreen.isOpen()) {
+        if (anyOverlay && !imageViewer.isOpen() && !installerScreen.isOpen()
+            && !settingsScreen.isOpen() && !webInstallDemoScreen.isOpen()) {
             int scrimH = theme::HEADER_H + theme::PANEL_CONTENT_H;
             renderer.drawRectFilled(0, 0, theme::SCREEN_W, scrimH, theme::MENU_SCRIM_CONTENT);
         }
-        if (!imageViewer.isOpen() && !installerScreen.isOpen() && !settingsScreen.isOpen())
+        if (!imageViewer.isOpen() && !installerScreen.isOpen()
+            && !settingsScreen.isOpen() && !webInstallDemoScreen.isOpen())
             renderFooter(renderer, fontManager, i18n);
 
         if (mainMenu.isOpen()) mainMenu.render(renderer, fontManager, i18n, menuSt);
@@ -1003,6 +1019,7 @@ int Application::run(int argc, char* argv[]) {
         imageViewer.render(renderer);
         installerScreen.render(renderer, fontManager, i18n);
         settingsScreen.render(renderer, fontManager, i18n);
+        webInstallDemoScreen.render(renderer, fontManager);
 
         toast.render(renderer, fontManager);
         renderer.present();
@@ -1012,6 +1029,7 @@ int Application::run(int argc, char* argv[]) {
 
     leftPanel.list.destroyCache();
     rightPanel.list.destroyCache();
+    webInstallDemoScreen.close();
     for (auto& e : icons)
         if (e.tex) SDL_DestroyTexture(e.tex);
     fontManager.shutdown();
