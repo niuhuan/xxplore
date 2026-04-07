@@ -62,4 +62,13 @@ void Renderer::drawLine(int x1, int y1, int x2, int y2, SDL_Color c) {
     SDL_RenderDrawLine(sdlRenderer, x1, y1, x2, y2);
 }
 
+void Renderer::setClipRect(int x, int y, int w, int h) {
+    SDL_Rect clip = {x, y, w, h};
+    SDL_RenderSetClipRect(sdlRenderer, &clip);
+}
+
+void Renderer::clearClipRect() {
+    SDL_RenderSetClipRect(sdlRenderer, nullptr);
+}
+
 } // namespace xplore

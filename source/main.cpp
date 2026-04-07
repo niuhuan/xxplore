@@ -6,18 +6,17 @@
 #include "ui/theme.hpp"
 #include "ui/renderer.hpp"
 #include "ui/font_manager.hpp"
+#include "ui/file_list.hpp"
 #include "ui/toast.hpp"
 
-struct ListItem {
-    std::string label;
-    enum Action { NONE, SHOW_TOAST } action;
-};
+enum { ACTION_NONE = 0, ACTION_SHOW_TOAST };
+enum ActivePanel { PANEL_LEFT, PANEL_RIGHT };
 
-static std::vector<ListItem> buildListItems() {
-    std::vector<ListItem> items;
-    items.push_back({"sdmc:", ListItem::NONE});
+static std::vector<xplore::ListItem> buildListItems() {
+    std::vector<xplore::ListItem> items;
+    items.push_back({"sdmc:", ACTION_NONE});
 #ifdef XPLORE_DEBUG
-    items.push_back({"Test Toast", ListItem::SHOW_TOAST});
+    items.push_back({"Test Toast", ACTION_SHOW_TOAST});
 #endif
     return items;
 }
@@ -40,8 +39,13 @@ int main(int argc, char* argv[]) {
 
     if (ok) {
         xplore::Toast toast;
-        auto items = buildListItems();
-        int cursor = 0;
+
+        xplore::FileList leftList;
+        xplore::FileList rightList;
+        leftList.setItems(buildListItems());
+        rightList.setItems(buildListItems());
+
+        ActivePanel activePanel = PANEL_LEFT;
         uint32_t lastTick = SDL_GetTicks();
 
         while (appletMainLoop()) {
@@ -55,19 +59,30 @@ int main(int argc, char* argv[]) {
             if (kDown & HidNpadButton_Plus)
                 break;
 
-            if (kDown & HidNpadButton_AnyUp) {
-                if (cursor > 0) cursor--;
+            // L/R panel switching
+            if (kDown & HidNpadButton_L) {
+                activePanel = PANEL_LEFT;
+                printf("Switch to LEFT panel\n");
             }
-            if (kDown & HidNpadButton_AnyDown) {
-                if (cursor < (int)items.size() - 1) cursor++;
+            if (kDown & HidNpadButton_R) {
+                activePanel = PANEL_RIGHT;
+                printf("Switch to RIGHT panel\n");
             }
+
+            // Input goes to active panel only
+            xplore::FileList& active = (activePanel == PANEL_LEFT) ? leftList : rightList;
+
+            if (kDown & HidNpadButton_AnyUp)
+                active.moveCursorUp();
+            if (kDown & HidNpadButton_AnyDown)
+                active.moveCursorDown();
+
             if (kDown & HidNpadButton_A) {
-                if (cursor >= 0 && cursor < (int)items.size()) {
-                    if (items[cursor].action == ListItem::SHOW_TOAST) {
-                        toast.show("List Directory: sdmc:/",
-                                   "No such device (open dir)");
-                        printf("Toast triggered\n");
-                    }
+                auto* item = active.getSelectedItem();
+                if (item && item->action == ACTION_SHOW_TOAST) {
+                    toast.show("List Directory: sdmc:/",
+                               "No such device (open dir)");
+                    printf("Toast triggered\n");
                 }
             }
 
@@ -87,26 +102,44 @@ int main(int argc, char* argv[]) {
             renderer.drawRectFilled(0, xplore::theme::HEADER_H - 1,
                 xplore::theme::SCREEN_W, 1, xplore::theme::DIVIDER);
 
-            // List
-            for (int i = 0; i < (int)items.size(); i++) {
-                int y = xplore::theme::HEADER_H + i * xplore::theme::ITEM_H;
+            // Dual panel layout
+            int leftW, rightW, rightX;
+            if (activePanel == PANEL_LEFT) {
+                leftW  = xplore::theme::ACTIVE_PANEL_W;
+                rightW = xplore::theme::INACTIVE_PANEL_W;
+            } else {
+                leftW  = xplore::theme::INACTIVE_PANEL_W;
+                rightW = xplore::theme::ACTIVE_PANEL_W;
+            }
+            rightX = leftW;
 
-                if (i == cursor) {
-                    renderer.drawRectFilled(0, y,
-                        xplore::theme::SCREEN_W, xplore::theme::ITEM_H,
-                        xplore::theme::CURSOR_ROW);
-                }
+            int panelY = xplore::theme::HEADER_H;
+            int panelH = xplore::theme::PANEL_CONTENT_H;
 
-                fontManager.drawText(renderer.sdl(), items[i].label.c_str(),
-                    xplore::theme::PADDING,
-                    y + (xplore::theme::ITEM_H - xplore::theme::FONT_SIZE_ITEM) / 2,
-                    xplore::theme::FONT_SIZE_ITEM, xplore::theme::TEXT);
+            // Left panel
+            leftList.render(renderer, fontManager,
+                0, panelY, leftW, panelH,
+                activePanel == PANEL_LEFT);
 
-                renderer.drawRectFilled(
-                    xplore::theme::PADDING,
-                    y + xplore::theme::ITEM_H - 1,
-                    xplore::theme::SCREEN_W - xplore::theme::PADDING * 2, 1,
-                    xplore::theme::DIVIDER);
+            // Inactive mask on left
+            if (activePanel != PANEL_LEFT) {
+                renderer.drawRectFilled(0, panelY, leftW, panelH,
+                    xplore::theme::MASK_OVERLAY);
+            }
+
+            // Divider
+            renderer.drawRectFilled(rightX - 1, panelY, 2, panelH,
+                xplore::theme::DIVIDER);
+
+            // Right panel
+            rightList.render(renderer, fontManager,
+                rightX, panelY, rightW, panelH,
+                activePanel == PANEL_RIGHT);
+
+            // Inactive mask on right
+            if (activePanel != PANEL_RIGHT) {
+                renderer.drawRectFilled(rightX, panelY, rightW, panelH,
+                    xplore::theme::MASK_OVERLAY);
             }
 
             toast.render(renderer, fontManager);
