@@ -29,6 +29,10 @@ public:
     void setItems(std::vector<ListItem> newItems, bool hasGoUpEntry = false,
                   bool selectionEnabled = true);
 
+    /// Replace items, clear selection, keep cursor index clamped to new size.
+    void reloadItems(std::vector<ListItem> newItems, bool hasGoUpEntry,
+                     bool selectionEnabled, int preserveCursorIndex);
+
     const std::vector<ListItem>& getItems() const { return items; }
 
     // --- cursor movement ---

@@ -20,6 +20,25 @@ void FileList::setItems(std::vector<ListItem> newItems, bool hasGoUpEntry,
     dirty = true;
 }
 
+void FileList::reloadItems(std::vector<ListItem> newItems, bool hasGoUpEntry,
+                           bool allowSelection, int preserveCursorIndex) {
+    items = std::move(newItems);
+    selection.clear();
+    selectionEnabled     = allowSelection;
+    firstSelectableIndex = hasGoUpEntry ? 1 : 0;
+    int n                = static_cast<int>(items.size());
+    if (n <= 0)
+        cursor = 0;
+    else if (preserveCursorIndex >= n)
+        cursor = n - 1;
+    else if (preserveCursorIndex < 0)
+        cursor = 0;
+    else
+        cursor = preserveCursorIndex;
+    scrollTop = 0;
+    dirty     = true;
+}
+
 // --- cursor movement ---
 
 void FileList::moveCursorUp() {

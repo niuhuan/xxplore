@@ -1,5 +1,6 @@
 #include "ui/font_manager.hpp"
 #include <cstdio>
+#include <string>
 
 namespace xplore {
 
@@ -76,6 +77,33 @@ int FontManager::fontHeight(int fontSize) {
     TTF_Font* font = getFont(fontSize);
     if (!font) return fontSize;
     return TTF_FontHeight(font);
+}
+
+void FontManager::drawTextEllipsis(SDL_Renderer* renderer, const char* text,
+                                   int x, int y, int fontSize, SDL_Color color,
+                                   int maxWidth) {
+    if (!text || !text[0] || maxWidth <= 0) return;
+    if (measureText(text, fontSize) <= maxWidth) {
+        drawText(renderer, text, x, y, fontSize, color);
+        return;
+    }
+    const char ell[] = "...";
+    int ellW = measureText(ell, fontSize);
+    if (ellW >= maxWidth) {
+        drawText(renderer, ell, x, y, fontSize, color);
+        return;
+    }
+    std::string s(text);
+    while (!s.empty()) {
+        s.pop_back();
+        if (s.empty()) break;
+        if (measureText(s.c_str(), fontSize) + ellW <= maxWidth) {
+            s += ell;
+            drawText(renderer, s.c_str(), x, y, fontSize, color);
+            return;
+        }
+    }
+    drawText(renderer, ell, x, y, fontSize, color);
 }
 
 } // namespace xplore

@@ -1,5 +1,6 @@
 #include "ui/renderer.hpp"
 #include "ui/theme.hpp"
+#include <SDL2/SDL2_gfxPrimitives.h>
 #include <SDL_image.h>
 #include <cstdio>
 
@@ -64,6 +65,23 @@ void Renderer::drawRect(int x, int y, int w, int h, SDL_Color c) {
 void Renderer::drawLine(int x1, int y1, int x2, int y2, SDL_Color c) {
     SDL_SetRenderDrawColor(sdlRenderer, c.r, c.g, c.b, c.a);
     SDL_RenderDrawLine(sdlRenderer, x1, y1, x2, y2);
+}
+
+void Renderer::drawRoundedRectFilled(int x, int y, int w, int h, int radius,
+                                     SDL_Color c) {
+    if (w <= 0 || h <= 0) return;
+    int x2 = x + w - 1;
+    int y2 = y + h - 1;
+    if (radius < 0) radius = 0;
+    roundedBoxRGBA(sdlRenderer, x, y, x2, y2, radius, c.r, c.g, c.b, c.a);
+}
+
+void Renderer::drawRoundedRect(int x, int y, int w, int h, int radius, SDL_Color c) {
+    if (w <= 0 || h <= 0) return;
+    int x2 = x + w - 1;
+    int y2 = y + h - 1;
+    if (radius < 0) radius = 0;
+    roundedRectangleRGBA(sdlRenderer, x, y, x2, y2, radius, c.r, c.g, c.b, c.a);
 }
 
 void Renderer::setClipRect(int x, int y, int w, int h) {

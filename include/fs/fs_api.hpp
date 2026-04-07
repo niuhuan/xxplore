@@ -39,5 +39,25 @@ std::string joinPath(const std::string& dir, const std::string& name);
 /// Returns "folder" for directories, otherwise matches the extension table.
 const char* iconForEntry(const FileEntry& entry);
 
+// --- path checks & ASCII filename rules (rename / new folder) ---
+
+bool pathExists(const std::string& path);
+bool isDirectoryPath(const std::string& path);
+
+/// Allowed: [A-Za-z0-9._-]+, length <= 255, not "." or "..", no leading/trailing '.'.
+bool isValidEnglishFileName(const std::string& name);
+
+// --- mutations (UTF-8 paths; names validated separately where needed) ---
+
+bool createDirectory(const std::string& path, std::string& errOut);
+bool removeAll(const std::string& path, std::string& errOut);
+bool renamePath(const std::string& from, const std::string& to, std::string& errOut);
+/// Copy file or directory tree. If @p dst exists and overwrite=false, fails.
+bool copyEntry(const std::string& src, const std::string& dst, bool overwrite,
+               std::string& errOut);
+/// Rename, or copy+remove if rename fails (e.g. cross-device).
+bool moveEntry(const std::string& src, const std::string& dst, bool overwrite,
+               std::string& errOut);
+
 } // namespace fs
 } // namespace xplore

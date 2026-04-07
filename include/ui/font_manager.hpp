@@ -24,6 +24,10 @@ public:
     /// Return the line height for a given point size.
     int fontHeight(int fontSize);
 
+    /// Draw UTF-8 text truncated with "..." if wider than @p maxWidth.
+    void drawTextEllipsis(SDL_Renderer* renderer, const char* text,
+                          int x, int y, int fontSize, SDL_Color color, int maxWidth);
+
 private:
     /// Open (or return cached) TTF_Font for the requested point size.
     TTF_Font* getFont(int size);

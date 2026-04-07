@@ -29,9 +29,12 @@ constexpr SDL_Color TOAST_BG        = {0x12, 0x12, 0x1c, 0xf0};
 constexpr SDL_Color TOAST_BORDER    = {0xef, 0x44, 0x44, 0xff};
 constexpr SDL_Color TOAST_TEXT      = {0xf8, 0xd7, 0xda, 0xff};
 constexpr SDL_Color MENU_OVERLAY    = {0x00, 0x00, 0x00, 0x99};
+/// Light scrim over header+file panels only (footer stays readable; list remains visible).
+constexpr SDL_Color MENU_SCRIM_CONTENT = {0x00, 0x00, 0x00, 0x55};
 constexpr SDL_Color MENU_BG         = {0x2a, 0x2a, 0x3c, 0xff};
 constexpr SDL_Color MENU_BORDER     = {0x3a, 0x3a, 0x4c, 0xff};
 constexpr SDL_Color MENU_ITEM_TEXT  = {0xe0, 0xe0, 0xe0, 0xff};
+constexpr SDL_Color MENU_DIM_EXTRA  = {0x00, 0x00, 0x00, 0x66}; ///< Extra dim on modals only
 
 // --- Screen & layout ---
 constexpr int SCREEN_W         = 1280;
@@ -58,6 +61,13 @@ constexpr int MENU_W           = 400;
 constexpr int MENU_ITEM_H      = 48;
 constexpr int MENU_RADIUS      = 12;
 constexpr int MENU_PADDING     = 8;
+/// Bottom sheet main menu (4-column grid)
+constexpr int MENU_SHEET_MARGIN_X = 20;
+constexpr int MENU_SHEET_TITLE_H  = 34;
+constexpr int MENU_SHEET_CONTEXT_H = 56;
+constexpr int MENU_SHEET_CELL_H   = 50;
+constexpr int MENU_SHEET_ROWS     = 5; ///< Action rows under context
+constexpr int MENU_SHEET_ANIM_MS  = 220;
 
 // --- Toast ---
 constexpr int TOAST_W        = 600;
