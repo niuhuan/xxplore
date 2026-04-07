@@ -157,13 +157,14 @@ void BottomMainMenu::update(uint32_t deltaMs, uint64_t kDown, const MainMenuStat
     if (kDown & HidNpadButton_A) activateCell(st);
 }
 
-static const char* labelKey(int row, int col) {
+static const char* labelKey(int row, int col, const MainMenuState& st) {
     if (row == 2) {
         const char* k[] = {"menu.select_toggle", "menu.rename", "menu.new_folder", "menu.delete"};
         return k[col];
     }
     if (row == 3) {
-        const char* k[] = {"menu.copy", "menu.cut", "menu.paste", ""};
+        const char* pasteKey = st.pasteFromCut ? "menu.paste_move_here" : "menu.paste_copy_here";
+        const char* k[] = {"menu.copy", "menu.cut", pasteKey, ""};
         return k[col];
     }
     if (row == 4) {
@@ -253,7 +254,7 @@ void BottomMainMenu::render(Renderer& renderer, FontManager& fm, const I18n& i18
                 renderer.drawRoundedRect(cx + 2, cy + 2, cellW - 4, MENU_SHEET_CELL_H - 4, 8,
                                          PRIMARY_DIM);
             }
-            const char* key = labelKey(row, col);
+            const char* key = labelKey(row, col, st);
             if (!key || !key[0]) continue;
             SDL_Color colr = dis ? TEXT_DISABLED : (foc ? PRIMARY : MENU_ITEM_TEXT);
             fm.drawTextEllipsis(renderer.sdl(), i18n.t(key), cx + 8,

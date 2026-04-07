@@ -9,28 +9,43 @@ class FontManager;
 class I18n;
 
 enum class ConfirmResult { None, Confirmed, Cancelled };
+enum class ChoiceResult  { None, Cancel, Merge, Overwrite };
 
-/// Two-button A/B confirm dialog (delete, overwrite, …).
+/// Two-button OK/Cancel confirm dialog (delete, …). B = Cancel.
 class ModalConfirm {
 public:
     void open(std::string title, std::string body);
     void close();
 
     bool isOpen() const { return active; }
-
-    /// @param kDown  padGetButtonsDown this frame
     ConfirmResult handleInput(uint64_t kDown);
-
     void render(Renderer& renderer, FontManager& fm, const I18n& i18n);
 
 private:
     bool        active = false;
     std::string title;
     std::string body;
-    int         focusOk = 1; ///< 1 = OK focused, 0 = Cancel focused
+    int         focusOk = 1;
 };
 
-/// Blocking-style progress (copy/move); no dismiss until host closes.
+/// Three-button choice dialog (Cancel / Merge / Overwrite). B = Cancel.
+class ModalChoice {
+public:
+    void open(std::string title, std::string body);
+    void close();
+
+    bool isOpen() const { return active; }
+    ChoiceResult handleInput(uint64_t kDown);
+    void render(Renderer& renderer, FontManager& fm, const I18n& i18n);
+
+private:
+    bool        active = false;
+    std::string title;
+    std::string body;
+    int         focus = 0; ///< 0=Cancel, 1=Merge, 2=Overwrite
+};
+
+/// Blocking-style progress; shows "- to interrupt" hint.
 class ModalProgress {
 public:
     void open(std::string title, std::string detail);
@@ -38,7 +53,7 @@ public:
     void close();
 
     bool isOpen() const { return active; }
-    void render(Renderer& renderer, FontManager& fm);
+    void render(Renderer& renderer, FontManager& fm, const I18n& i18n);
 
 private:
     bool        active = false;
@@ -46,14 +61,13 @@ private:
     std::string detail;
 };
 
-/// Scroll-free multi-line info (help / about / clipboard list).
+/// Scroll-free multi-line info (help / about / clipboard list). B = close.
 class ModalInfo {
 public:
     void open(std::string title, std::string body);
     void close();
 
     bool isOpen() const { return active; }
-
     ConfirmResult handleInput(uint64_t kDown);
     void render(Renderer& renderer, FontManager& fm);
 

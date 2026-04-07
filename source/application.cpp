@@ -159,7 +159,7 @@ static void renderFooter(Renderer& renderer, FontManager& fontManager, const I18
     }
 }
 
-enum class PendingConfirm { None, DeleteItems };
+enum class PendingConfirm { None, DeleteItems, PasteChoice };
 
 } // namespace
 
@@ -192,6 +192,7 @@ int Application::run(int argc, char* argv[]) {
     fs::Clipboard clipboard;
     BottomMainMenu mainMenu;
     ModalConfirm modalConfirm;
+    ModalChoice  modalChoice;
     ModalProgress modalProgress;
     ModalInfo modalInfo;
 
@@ -275,6 +276,7 @@ int Application::run(int argc, char* argv[]) {
 
         bool clipEmpty = clipboard.empty();
         bool pasteDis  = clipEmpty;
+        st.pasteFromCut = !clipEmpty && clipboard.operation() == fs::ClipboardOp::Cut;
         if (!clipEmpty && !fs::clipboardPasteDestinationAllowed(clipboard, a.path))
             pasteDis = true;
         st.disablePaste     = pasteDis;
@@ -311,13 +313,19 @@ int Application::run(int argc, char* argv[]) {
             renderer.drawRectFilled(rx, panelY_, rw, panelH_, theme::MASK_OVERLAY);
     };
 
-    auto pumpProgress = [&]() {
+    bool interrupted = false;
+
+    auto pumpProgress = [&]() -> bool {
+        padUpdate(&pad);
+        u64 k = padGetButtonsDown(&pad);
+        if (k & HidNpadButton_Minus) interrupted = true;
         renderScene();
         int scrimH = theme::HEADER_H + theme::PANEL_CONTENT_H;
         renderer.drawRectFilled(0, 0, theme::SCREEN_W, scrimH, theme::MENU_SCRIM_CONTENT);
         renderFooter(renderer, fontManager, i18n);
-        modalProgress.render(renderer, fontManager);
+        modalProgress.render(renderer, fontManager, i18n);
         renderer.present();
+        return !interrupted;
     };
 
     while (appletMainLoop()) {
@@ -332,7 +340,7 @@ int Application::run(int argc, char* argv[]) {
         FileList& activeList = active.list;
 
         bool modalBlocking =
-            modalConfirm.isOpen() || modalProgress.isOpen() || modalInfo.isOpen();
+            modalConfirm.isOpen() || modalChoice.isOpen() || modalProgress.isOpen() || modalInfo.isOpen();
         bool menuBlocking = mainMenu.isOpen();
 
         // Plus toggles menu
@@ -349,22 +357,23 @@ int Application::run(int argc, char* argv[]) {
                 if (pendingConfirm == PendingConfirm::DeleteItems) {
                     modalConfirm.close();
                     pendingConfirm = PendingConfirm::None;
+                    interrupted = false;
                     modalProgress.open(i18n.t("progress.deleting"), "");
                     bool delErr = false;
                     std::string delLastErr;
                     for (const auto& p : pendingDeletePaths) {
                         modalProgress.setDetail(p);
-                        pumpProgress();
+                        if (!pumpProgress()) break;
                         std::string err;
-                        if (!fs::removeAll(p, err)) {
-                            delErr = true;
-                            delLastErr = err;
-                        }
+                        if (!fs::removeAll(p, err)) { delErr = true; delLastErr = err; }
                     }
                     modalProgress.close();
                     refreshPath(savedDeleteDir, savedDeleteCursor);
                     pendingDeletePaths.clear();
-                    if (delErr)
+                    if (interrupted) {
+                        toast.show(i18n.t("toast.interrupted"), "", ToastKind::Warning, 4000);
+                        clipboard.clear();
+                    } else if (delErr)
                         toast.show(i18n.t("error.operation_failed"), delLastErr.c_str(), ToastKind::Error, 3000);
                     else
                         toast.show(i18n.t("toast.deleted"), "", ToastKind::Success, 2200);
@@ -373,6 +382,55 @@ int Application::run(int argc, char* argv[]) {
                 modalConfirm.close();
                 pendingConfirm = PendingConfirm::None;
                 pendingDeletePaths.clear();
+            }
+        }
+
+        if (modalChoice.isOpen()) {
+            ChoiceResult ch = modalChoice.handleInput(kDown);
+            if (ch != ChoiceResult::None) {
+                modalChoice.close();
+                if (ch == ChoiceResult::Cancel || pendingConfirm != PendingConfirm::PasteChoice) {
+                    pendingConfirm = PendingConfirm::None;
+                } else {
+                    pendingConfirm = PendingConfirm::None;
+                    bool isCut = (clipboard.operation() == fs::ClipboardOp::Cut);
+                    std::string destDir = active.path;
+                    int savedCursor = activeList.getCursor();
+                    interrupted = false;
+                    const char* progressTitle = isCut ? i18n.t("progress.moving") : i18n.t("progress.copying");
+                    modalProgress.open(progressTitle, "");
+                    bool anyError = false;
+                    std::string lastErr;
+                    auto onProgress = [&](const std::string& f) -> bool {
+                        modalProgress.setDetail(f);
+                        return pumpProgress();
+                    };
+                    for (const auto& e : clipboard.items()) {
+                        if (interrupted) break;
+                        std::string src = e.fullPath;
+                        std::string dst = fs::joinPath(destDir, e.name);
+                        std::string err;
+                        bool ok = true;
+                        if (ch == ChoiceResult::Merge) {
+                            ok = isCut ? fs::moveEntryMerge(src, dst, err, onProgress)
+                                       : fs::copyEntryMerge(src, dst, err, onProgress);
+                        } else if (ch == ChoiceResult::Overwrite) {
+                            ok = isCut ? fs::moveEntryOverwrite(src, dst, err, onProgress)
+                                       : fs::copyEntryOverwrite(src, dst, err, onProgress);
+                        }
+                        if (!ok && err != "interrupted") { anyError = true; lastErr = err; }
+                    }
+                    modalProgress.close();
+                    clipboard.clear();
+                    activeList.clearSelection();
+                    refreshPath(destDir, savedCursor);
+                    if (interrupted)
+                        toast.show(i18n.t("toast.interrupted"), "", ToastKind::Warning, 4000);
+                    else if (anyError)
+                        toast.show(i18n.t("error.operation_failed"), lastErr.c_str(), ToastKind::Error, 3000);
+                    else
+                        toast.show(i18n.t(isCut ? "toast.moved" : "toast.copied"), "", ToastKind::Success, 2200);
+                }
             }
         }
 
@@ -515,43 +573,51 @@ int Application::run(int argc, char* argv[]) {
                     toast.show(i18n.t("error.operation_failed"), i18n.t("error.paste_forbidden"), ToastKind::Warning, 3200);
                     break;
                 }
-                bool isCut = (clipboard.operation() == fs::ClipboardOp::Cut);
-                std::string destDir = active.path;
-                int savedCursor = activeList.getCursor();
                 mainMenu.close();
-
-                bool anyError = false;
-                std::string lastErr;
-
-                const char* progressTitle = isCut ? i18n.t("progress.moving")
-                                                   : i18n.t("progress.copying");
-                modalProgress.open(progressTitle, "");
-                auto onProgress = [&](const std::string& currentFile) {
-                    modalProgress.setDetail(currentFile);
-                    pumpProgress();
-                };
+                // Check if any destination already exists
+                bool anyExists = false;
                 for (const auto& e : clipboard.items()) {
-                    std::string src = e.fullPath;
-                    std::string dst = fs::joinPath(destDir, e.name);
-                    bool overwrite = fs::pathExists(dst);
-                    modalProgress.setDetail(e.name);
-                    pumpProgress();
-                    std::string err;
-                    bool ok = isCut
-                        ? fs::moveEntryWithProgress(src, dst, overwrite, err, onProgress)
-                        : fs::copyEntryWithProgress(src, dst, overwrite, err, onProgress);
-                    if (!ok) {
-                        anyError = true;
-                        lastErr = err;
-                    }
+                    if (fs::pathExists(fs::joinPath(active.path, e.name))) { anyExists = true; break; }
                 }
-                modalProgress.close();
-                clipboard.clear();
-                refreshPath(destDir, savedCursor);
-                if (anyError)
-                    toast.show(i18n.t("error.operation_failed"), lastErr.c_str(), ToastKind::Error, 3000);
-                else
-                    toast.show(i18n.t("toast.pasted"), "", ToastKind::Success, 2200);
+                if (anyExists) {
+                    bool isCut = (clipboard.operation() == fs::ClipboardOp::Cut);
+                    const char* t = isCut ? i18n.t("confirm.move_conflict_title") : i18n.t("confirm.copy_conflict_title");
+                    const char* b = isCut ? i18n.t("confirm.move_conflict_body") : i18n.t("confirm.copy_conflict_body");
+                    modalChoice.open(t, b);
+                    pendingConfirm = PendingConfirm::PasteChoice;
+                } else {
+                    bool isCut = (clipboard.operation() == fs::ClipboardOp::Cut);
+                    std::string destDir = active.path;
+                    int savedCursor = activeList.getCursor();
+                    interrupted = false;
+                    const char* progressTitle = isCut ? i18n.t("progress.moving") : i18n.t("progress.copying");
+                    modalProgress.open(progressTitle, "");
+                    bool anyError = false;
+                    std::string lastErr;
+                    auto onProgress = [&](const std::string& f) -> bool {
+                        modalProgress.setDetail(f);
+                        return pumpProgress();
+                    };
+                    for (const auto& e : clipboard.items()) {
+                        if (interrupted) break;
+                        std::string src = e.fullPath;
+                        std::string dst = fs::joinPath(destDir, e.name);
+                        std::string err;
+                        bool ok = isCut ? fs::moveEntrySimple(src, dst, err, onProgress)
+                                        : fs::copyEntrySimple(src, dst, err, onProgress);
+                        if (!ok && err != "interrupted") { anyError = true; lastErr = err; }
+                    }
+                    modalProgress.close();
+                    clipboard.clear();
+                    activeList.clearSelection();
+                    refreshPath(destDir, savedCursor);
+                    if (interrupted)
+                        toast.show(i18n.t("toast.interrupted"), "", ToastKind::Warning, 4000);
+                    else if (anyError)
+                        toast.show(i18n.t("error.operation_failed"), lastErr.c_str(), ToastKind::Error, 3000);
+                    else
+                        toast.show(i18n.t(isCut ? "toast.moved" : "toast.copied"), "", ToastKind::Success, 2200);
+                }
                 break;
             }
             case MenuCommand::Delete: {
@@ -664,7 +730,8 @@ int Application::run(int argc, char* argv[]) {
         renderScene();
 
         const bool anyOverlay =
-            mainMenu.isOpen() || modalConfirm.isOpen() || modalProgress.isOpen() || modalInfo.isOpen();
+            mainMenu.isOpen() || modalConfirm.isOpen() || modalChoice.isOpen()
+            || modalProgress.isOpen() || modalInfo.isOpen();
         if (anyOverlay) {
             int scrimH = theme::HEADER_H + theme::PANEL_CONTENT_H;
             renderer.drawRectFilled(0, 0, theme::SCREEN_W, scrimH, theme::MENU_SCRIM_CONTENT);
@@ -673,7 +740,8 @@ int Application::run(int argc, char* argv[]) {
 
         if (mainMenu.isOpen()) mainMenu.render(renderer, fontManager, i18n, menuSt);
         modalConfirm.render(renderer, fontManager, i18n);
-        modalProgress.render(renderer, fontManager);
+        modalChoice.render(renderer, fontManager, i18n);
+        modalProgress.render(renderer, fontManager, i18n);
         modalInfo.render(renderer, fontManager);
 
         toast.render(renderer, fontManager);

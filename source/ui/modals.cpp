@@ -11,11 +11,13 @@ static constexpr int kCardW = 560;
 static constexpr int kCardH = 220;
 static constexpr int kPad   = 20;
 
+// ---- ModalConfirm (OK / Cancel) ----
+
 void ModalConfirm::open(std::string t, std::string b) {
     active  = true;
     title   = std::move(t);
     body    = std::move(b);
-    focusOk = 1;
+    focusOk = 0;
 }
 
 void ModalConfirm::close() {
@@ -58,14 +60,92 @@ void ModalConfirm::render(Renderer& renderer, FontManager& fm, const I18n& i18n)
     int okW              = fm.measureText(okTxt, FONT_SIZE_ITEM);
     int cancelW          = fm.measureText(cancelTxt, FONT_SIZE_ITEM);
     int gap              = 40;
-    int total            = okW + gap + cancelW;
+    int total            = cancelW + gap + okW;
     int bx               = cx + (kCardW - total) / 2;
 
-    SDL_Color okCol    = focusOk ? PRIMARY : TEXT_SECONDARY;
-    SDL_Color canCol   = focusOk ? TEXT_SECONDARY : PRIMARY;
-    fm.drawText(renderer.sdl(), okTxt, bx, btnY, FONT_SIZE_ITEM, okCol);
-    fm.drawText(renderer.sdl(), cancelTxt, bx + okW + gap, btnY, FONT_SIZE_ITEM, canCol);
+    SDL_Color canCol   = (focusOk == 0) ? PRIMARY : TEXT_SECONDARY;
+    SDL_Color okCol    = (focusOk == 1) ? PRIMARY : TEXT_SECONDARY;
+    fm.drawText(renderer.sdl(), cancelTxt, bx, btnY, FONT_SIZE_ITEM, canCol);
+    fm.drawText(renderer.sdl(), okTxt, bx + cancelW + gap, btnY, FONT_SIZE_ITEM, okCol);
 }
+
+// ---- ModalChoice (Cancel / Merge / Overwrite) ----
+
+void ModalChoice::open(std::string t, std::string b) {
+    active = true;
+    title  = std::move(t);
+    body   = std::move(b);
+    focus  = 0;
+}
+
+void ModalChoice::close() {
+    active = false;
+    title.clear();
+    body.clear();
+}
+
+ChoiceResult ModalChoice::handleInput(uint64_t kDown) {
+    if (!active) return ChoiceResult::None;
+    if (kDown & HidNpadButton_B)
+        return ChoiceResult::Cancel;
+    if (kDown & HidNpadButton_A) {
+        switch (focus) {
+        case 0: return ChoiceResult::Cancel;
+        case 1: return ChoiceResult::Merge;
+        case 2: return ChoiceResult::Overwrite;
+        }
+    }
+    if (kDown & HidNpadButton_AnyLeft) {
+        focus--;
+        if (focus < 0) focus = 2;
+    }
+    if (kDown & HidNpadButton_AnyRight) {
+        focus++;
+        if (focus > 2) focus = 0;
+    }
+    return ChoiceResult::None;
+}
+
+void ModalChoice::render(Renderer& renderer, FontManager& fm, const I18n& i18n) {
+    if (!active) return;
+    using namespace theme;
+
+    int cx = (SCREEN_W - kCardW) / 2;
+    int cy = (SCREEN_H - kCardH) / 2;
+
+    renderer.drawRoundedRectFilled(cx, cy, kCardW, kCardH, MENU_RADIUS, MENU_BG);
+    renderer.drawRoundedRect(cx, cy, kCardW, kCardH, MENU_RADIUS, MENU_BORDER);
+
+    int tx = cx + kPad;
+    int ty = cy + kPad;
+    fm.drawText(renderer.sdl(), title.c_str(), tx, ty, FONT_SIZE_ITEM, TEXT);
+    ty += FONT_SIZE_ITEM + 12;
+    fm.drawTextEllipsis(renderer.sdl(), body.c_str(), tx, ty, FONT_SIZE_SMALL, TEXT_SECONDARY,
+                        kCardW - kPad * 2);
+
+    const char* labels[3] = {
+        i18n.t("modal.cancel"),
+        i18n.t("modal.merge"),
+        i18n.t("modal.overwrite"),
+    };
+    int btnY = cy + kCardH - 56;
+    int gap  = 30;
+    int ws[3];
+    int total = 0;
+    for (int i = 0; i < 3; i++) {
+        ws[i] = fm.measureText(labels[i], FONT_SIZE_ITEM);
+        total += ws[i];
+    }
+    total += gap * 2;
+    int bx = cx + (kCardW - total) / 2;
+    for (int i = 0; i < 3; i++) {
+        SDL_Color col = (focus == i) ? PRIMARY : TEXT_SECONDARY;
+        fm.drawText(renderer.sdl(), labels[i], bx, btnY, FONT_SIZE_ITEM, col);
+        bx += ws[i] + gap;
+    }
+}
+
+// ---- ModalProgress ----
 
 void ModalProgress::open(std::string t, std::string d) {
     active = true;
@@ -79,13 +159,13 @@ void ModalProgress::close() {
     detail.clear();
 }
 
-void ModalProgress::render(Renderer& renderer, FontManager& fm) {
+void ModalProgress::render(Renderer& renderer, FontManager& fm, const I18n& i18n) {
     if (!active) return;
     using namespace theme;
 
     int cx = (SCREEN_W - kCardW) / 2;
     int cy = (SCREEN_H - 160) / 2;
-    int h  = 140;
+    int h  = 160;
 
     renderer.drawRoundedRectFilled(cx, cy, kCardW, h, MENU_RADIUS, MENU_BG);
     renderer.drawRoundedRect(cx, cy, kCardW, h, MENU_RADIUS, MENU_BORDER);
@@ -96,7 +176,12 @@ void ModalProgress::render(Renderer& renderer, FontManager& fm) {
     ty += FONT_SIZE_ITEM + 10;
     fm.drawTextEllipsis(renderer.sdl(), detail.c_str(), tx, ty, FONT_SIZE_SMALL, TEXT_SECONDARY,
                         kCardW - kPad * 2);
+    ty += FONT_SIZE_SMALL + 14;
+    const char* hint = i18n.t("modal.interrupt_hint");
+    fm.drawText(renderer.sdl(), hint, tx, ty, FONT_SIZE_SMALL, TEXT_DISABLED);
 }
+
+// ---- ModalInfo ----
 
 void ModalInfo::open(std::string t, std::string b) {
     active = true;
