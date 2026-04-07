@@ -39,10 +39,9 @@ void Clipboard::clear() {
 bool clipboardPasteDestinationAllowed(const Clipboard& clip, const std::string& destDir) {
     if (clip.empty()) return false;
     std::string d = normPathTrim(destDir);
-    if (clip.operation() == ClipboardOp::Cut) {
-        if (d == normPathTrim(clip.sourceDirectory()))
-            return false;
-    }
+    // Copy or cut: cannot paste back into the same folder (duplicate names / no-op).
+    if (d == normPathTrim(clip.sourceDirectory()))
+        return false;
     for (const auto& e : clip.items()) {
         if (!e.isDirectory) continue;
         if (isSameOrUnder(e.fullPath, d))

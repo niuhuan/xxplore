@@ -25,9 +25,12 @@ constexpr SDL_Color CHECKBOX_BORDER = {0x60, 0xa5, 0xfa, 0xff};
 constexpr SDL_Color CHECKBOX_FILL   = {0x60, 0xa5, 0xfa, 0xff};
 constexpr SDL_Color HEADER_BG       = {0x25, 0x25, 0x36, 0xff};
 constexpr SDL_Color BREADCRUMB_TEXT = {0xa0, 0xa0, 0xb8, 0xff};
-constexpr SDL_Color TOAST_BG        = {0x12, 0x12, 0x1c, 0xf0};
-constexpr SDL_Color TOAST_BORDER    = {0xef, 0x44, 0x44, 0xff};
-constexpr SDL_Color TOAST_TEXT      = {0xf8, 0xd7, 0xda, 0xff};
+constexpr SDL_Color TOAST_BG            = {0x12, 0x12, 0x1c, 0xf0};
+constexpr SDL_Color TOAST_TEXT          = {0xf8, 0xd7, 0xda, 0xff};
+constexpr SDL_Color TOAST_ERROR_BORDER  = {0xef, 0x44, 0x44, 0xff};
+constexpr SDL_Color TOAST_SUCCESS_BORDER= {0x22, 0xc5, 0x5e, 0xff};
+constexpr SDL_Color TOAST_WARNING_BORDER= {0xf5, 0x9e, 0x0b, 0xff};
+constexpr SDL_Color TOAST_INFO_BORDER   = {0x60, 0xa5, 0xfa, 0xff};
 constexpr SDL_Color MENU_OVERLAY    = {0x00, 0x00, 0x00, 0x99};
 /// Light scrim over header+file panels only (footer stays readable; list remains visible).
 constexpr SDL_Color MENU_SCRIM_CONTENT = {0x00, 0x00, 0x00, 0x55};
@@ -74,6 +77,7 @@ constexpr int TOAST_W        = 600;
 constexpr int TOAST_H        = 80;
 constexpr int TOAST_MARGIN   = 20;
 constexpr int TOAST_BORDER_W = 3;
+constexpr int TOAST_RADIUS   = 10;
 
 // --- Animation ---
 constexpr int   ANIM_DURATION_MS = 250;

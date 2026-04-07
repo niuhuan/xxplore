@@ -148,9 +148,7 @@ void FileList::updateCache(Renderer& renderer, FontManager& fontManager,
     else if (cursorBot > scrollTop + height)
         scrollTop = cursorBot - height;
 
-    bool selMode = selectionEnabled && hasSelection();
-    int checkboxSpace = selMode ? (theme::CHECKBOX_SIZE + theme::PADDING_SM) : 0;
-    int iconX = theme::PADDING + checkboxSpace;
+    int iconX = theme::PADDING;
     int textX = iconX + theme::ICON_SIZE + theme::PADDING_SM;
 
     for (int i = 0; i < (int)items.size(); i++) {
@@ -171,27 +169,6 @@ void FileList::updateCache(Renderer& renderer, FontManager& fontManager,
         if (i == cursor) {
             renderer.drawRectFilled(0, iy, width, theme::ITEM_H,
                                     theme::CURSOR_ROW);
-        }
-
-        // Checkbox (selection mode only, for selectable items)
-        if (selMode && i >= firstSelectableIndex) {
-            int cbX = theme::PADDING;
-            int cbY = iy + (theme::ITEM_H - theme::CHECKBOX_SIZE) / 2;
-            if (isSelected(i)) {
-                renderer.drawRectFilled(cbX, cbY,
-                    theme::CHECKBOX_SIZE, theme::CHECKBOX_SIZE,
-                    theme::CHECKBOX_FILL);
-                // Check mark (✓) in white, 2px thick
-                SDL_Color white = theme::ON_PRIMARY;
-                renderer.drawLine(cbX+5,  cbY+12, cbX+10, cbY+17, white);
-                renderer.drawLine(cbX+6,  cbY+12, cbX+11, cbY+17, white);
-                renderer.drawLine(cbX+10, cbY+17, cbX+19, cbY+7,  white);
-                renderer.drawLine(cbX+11, cbY+17, cbX+20, cbY+7,  white);
-            } else {
-                renderer.drawRect(cbX, cbY,
-                    theme::CHECKBOX_SIZE, theme::CHECKBOX_SIZE,
-                    theme::CHECKBOX_BORDER);
-            }
         }
 
         // Icon

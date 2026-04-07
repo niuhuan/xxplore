@@ -127,7 +127,7 @@ void BottomMainMenu::moveFocusHorizontal(int delta, const MainMenuState& st) {
 
 void BottomMainMenu::activateCell(const MainMenuState& st) {
     if (focusRow_ == 1) {
-        pending_ = MenuCommand::None;
+        pending_ = MenuCommand::CloseMenu;
         return;
     }
     if (cellDisabled(focusRow_, focusCol_, st)) return;

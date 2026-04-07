@@ -30,8 +30,9 @@ private:
     ClipboardOp                op = ClipboardOp::Copy;
 };
 
-/// False when: cut onto same folder as source, or @p destDir is the same path as / under any
-/// directory entry in the clipboard (cannot paste into self or own subfolder).
+/// False when: @p destDir is the clipboard source folder, or is the same path as / under any
+/// directory entry in the clipboard (cannot paste into same folder, into own subtree, or copy
+/// into a copied folder's subtree).
 bool clipboardPasteDestinationAllowed(const Clipboard& clip, const std::string& destDir);
 
 } // namespace fs

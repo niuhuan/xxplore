@@ -308,9 +308,6 @@ int Application::run(int argc, char* argv[]) {
 
         bool clipEmpty = clipboard.empty();
         bool pasteDis  = clipEmpty;
-        if (!clipEmpty && clipboard.sourceDirectory() == a.path &&
-            clipboard.operation() == fs::ClipboardOp::Cut)
-            pasteDis = true;
         if (!clipEmpty && !fs::clipboardPasteDestinationAllowed(clipboard, a.path))
             pasteDis = true;
         st.disablePaste     = pasteDis;
@@ -367,7 +364,7 @@ int Application::run(int argc, char* argv[]) {
                                   : fs::copyEntry(pasteCtrl.overwriteJob.first,
                                                   pasteCtrl.overwriteJob.second, true, err);
                     if (!ok)
-                        toast.show(i18n.t("error.operation_failed"), err.c_str(), 3000);
+                        toast.show(i18n.t("error.operation_failed"), err.c_str(), ToastKind::Error, 3000);
                     pasteCtrl.index++;
                 }
             } else if (cr == ConfirmResult::Cancelled) {
@@ -390,6 +387,7 @@ int Application::run(int argc, char* argv[]) {
             if (pasteCtrl.index >= pasteCtrl.queue.size()) {
                 clipboard.clear();
                 refreshPath(pasteCtrl.pasteTargetDir, pasteCtrl.savedCursor);
+                toast.show(i18n.t("toast.pasted"), "", ToastKind::Success, 2200);
                 pasteCtrl.running = false;
                 pasteCtrl.queue.clear();
                 pasteCtrl.index = 0;
@@ -413,7 +411,7 @@ int Application::run(int argc, char* argv[]) {
                                               : fs::copyEntry(job.first, job.second, false, err);
                     modalProgress.close();
                     if (!ok)
-                        toast.show(i18n.t("error.operation_failed"), err.c_str(), 3000);
+                        toast.show(i18n.t("error.operation_failed"), err.c_str(), ToastKind::Error, 3000);
                     pasteCtrl.index++;
                 }
             }
@@ -473,7 +471,10 @@ int Application::run(int argc, char* argv[]) {
                 mainMenu.close();
                 appQuit = true;
                 break;
-            case MenuCommand::ToggleSelectMode: activeList.toggleSelect(); break;
+            case MenuCommand::ToggleSelectMode:
+                activeList.toggleSelect();
+                mainMenu.close();
+                break;
             case MenuCommand::Settings:
                 modalInfo.open(i18n.t("menu.settings"), i18n.t("help.settings_body"));
                 mainMenu.close();
@@ -507,7 +508,7 @@ int Application::run(int argc, char* argv[]) {
             }
             case MenuCommand::ClearClipboard:
                 clipboard.clear();
-                toast.show(i18n.t("toast.clipboard_cleared"), "", 2000);
+                toast.show(i18n.t("toast.clipboard_cleared"), "", ToastKind::Info, 2000);
                 mainMenu.close();
                 break;
             case MenuCommand::Copy:
@@ -541,14 +542,14 @@ int Application::run(int argc, char* argv[]) {
                 clipboard.set(active.path, std::move(ents),
                                 cmd == MenuCommand::Cut ? fs::ClipboardOp::Cut : fs::ClipboardOp::Copy);
                 activeList.clearSelection();
-                toast.show(i18n.t(cmd == MenuCommand::Cut ? "toast.cut" : "toast.copied"), "", 2000);
+                toast.show(i18n.t(cmd == MenuCommand::Cut ? "toast.cut" : "toast.copied"), "", ToastKind::Success, 2000);
                 mainMenu.close();
                 break;
             }
             case MenuCommand::Paste: {
                 if (clipboard.empty()) break;
                 if (!fs::clipboardPasteDestinationAllowed(clipboard, active.path)) {
-                    toast.show(i18n.t("error.operation_failed"), i18n.t("error.paste_forbidden"), 3200);
+                    toast.show(i18n.t("error.operation_failed"), i18n.t("error.paste_forbidden"), ToastKind::Warning, 3200);
                     break;
                 }
                 pasteCtrl.queue.clear();
@@ -591,17 +592,17 @@ int Application::run(int argc, char* argv[]) {
                     break;
                 std::string name(buf);
                 if (!fs::isValidEnglishFileName(name)) {
-                    toast.show(i18n.t("error.invalid_name"), "", 3000);
+                    toast.show(i18n.t("error.invalid_name"), "", ToastKind::Warning, 3000);
                     break;
                 }
                 std::string full = fs::joinPath(active.path, name);
                 if (fs::pathExists(full)) {
-                    toast.show(i18n.t("error.exists"), "", 3000);
+                    toast.show(i18n.t("error.exists"), "", ToastKind::Warning, 3000);
                     break;
                 }
                 std::string err;
                 if (!fs::createDirectory(full, err)) {
-                    toast.show(i18n.t("error.operation_failed"), err.c_str(), 3000);
+                    toast.show(i18n.t("error.operation_failed"), err.c_str(), ToastKind::Error, 3000);
                     break;
                 }
                 int kc = activeList.getCursor();
@@ -637,19 +638,19 @@ int Application::run(int argc, char* argv[]) {
                     break;
                 std::string newName(buf);
                 if (!fs::isValidEnglishFileName(newName)) {
-                    toast.show(i18n.t("error.invalid_name"), "", 3000);
+                    toast.show(i18n.t("error.invalid_name"), "", ToastKind::Warning, 3000);
                     break;
                 }
                 std::string from = fs::joinPath(active.path, target->label);
                 std::string to   = fs::joinPath(active.path, newName);
                 if (from == to) break;
                 if (fs::pathExists(to)) {
-                    toast.show(i18n.t("error.exists"), "", 3000);
+                    toast.show(i18n.t("error.exists"), "", ToastKind::Warning, 3000);
                     break;
                 }
                 std::string err;
                 if (!fs::renamePath(from, to, err)) {
-                    toast.show(i18n.t("error.operation_failed"), err.c_str(), 3000);
+                    toast.show(i18n.t("error.operation_failed"), err.c_str(), ToastKind::Error, 3000);
                     break;
                 }
                 int kc = activeList.getCursor();
