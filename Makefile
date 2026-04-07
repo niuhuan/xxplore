@@ -12,9 +12,9 @@ include $(DEVKITPRO)/libnx/switch_rules
 #---------------------------------------------------------------------------------
 TARGET		:=	$(notdir $(CURDIR))
 BUILD		:=	build
-SOURCES		:=	source source/ui
+SOURCES		:=	source source/ui source/fs
 DATA		:=	data
-INCLUDES	:=	include include/ui
+INCLUDES	:=	include include/ui include/fs
 ROMFS	:=	romfs
 
 APP_TITLE	:=	Xplore

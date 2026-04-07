@@ -127,6 +127,15 @@ def icon_settings():
     return img
 
 
+def icon_back():
+    img = new_img()
+    d = ImageDraw.Draw(img)
+    # Left-pointing arrow (chevron + horizontal bar)
+    d.line([(28, 14), (16, 24), (28, 34)], fill=WHITE, width=3)
+    d.line([(16, 24), (36, 24)], fill=WHITE, width=3)
+    return img
+
+
 def main():
     os.makedirs(OUT_DIR, exist_ok=True)
 
@@ -140,6 +149,7 @@ def main():
         "text": icon_text,
         "code": icon_code,
         "settings": icon_settings,
+        "back": icon_back,
     }
 
     for name, gen_fn in icons.items():
