@@ -13,3 +13,6 @@ build/
 
 # agents files
 AGENTS.md
+
+# source fonts, thin with scripts
+*.ttf

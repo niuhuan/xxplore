@@ -2,9 +2,10 @@
 #include <SDL.h>
 
 namespace xplore {
+/// Theme constants ported from plorex-js (colors.ts + layout.ts).
 namespace theme {
 
-// --- Colors (from plorex-js/src/theme/colors.ts) ---
+// --- Colors ---
 constexpr SDL_Color BG              = {0x1e, 0x1e, 0x2e, 0xff};
 constexpr SDL_Color SURFACE         = {0x2a, 0x2a, 0x3c, 0xff};
 constexpr SDL_Color SURFACE_HOVER   = {0x35, 0x35, 0x48, 0xff};
@@ -32,30 +33,34 @@ constexpr SDL_Color MENU_BG         = {0x2a, 0x2a, 0x3c, 0xff};
 constexpr SDL_Color MENU_BORDER     = {0x3a, 0x3a, 0x4c, 0xff};
 constexpr SDL_Color MENU_ITEM_TEXT  = {0xe0, 0xe0, 0xe0, 0xff};
 
-// --- Layout (from plorex-js/src/theme/layout.ts) ---
+// --- Screen & layout ---
 constexpr int SCREEN_W         = 1280;
 constexpr int SCREEN_H         = 720;
 constexpr int HEADER_H         = 50;
-constexpr int ITEM_H           = 56;
+constexpr int ITEM_H           = 56;   ///< Row height for file items / list items
 constexpr int INACTIVE_PANEL_W = 50;
 constexpr int ACTIVE_PANEL_W   = SCREEN_W - INACTIVE_PANEL_W;
 constexpr int PANEL_CONTENT_H  = SCREEN_H - HEADER_H;
-constexpr int ICON_SIZE        = 32;
+constexpr int ICON_SIZE        = 32;   ///< File-type icon dimensions (square)
 constexpr int CHECKBOX_SIZE    = 24;
 constexpr int PADDING          = 12;
 constexpr int PADDING_SM       = 8;
+
+// --- Font sizes ---
 constexpr int FONT_SIZE_TITLE  = 20;
 constexpr int FONT_SIZE_ITEM   = 18;
 constexpr int FONT_SIZE_SMALL  = 14;
+
+// --- Menu ---
 constexpr int MENU_W           = 400;
 constexpr int MENU_ITEM_H      = 48;
 constexpr int MENU_RADIUS      = 12;
 constexpr int MENU_PADDING     = 8;
 
-// --- Toast layout ---
-constexpr int TOAST_W      = 600;
-constexpr int TOAST_H      = 80;
-constexpr int TOAST_MARGIN = 20;
+// --- Toast ---
+constexpr int TOAST_W        = 600;
+constexpr int TOAST_H        = 80;
+constexpr int TOAST_MARGIN   = 20;
 constexpr int TOAST_BORDER_W = 3;
 
 } // namespace theme

@@ -1,5 +1,6 @@
 #include "ui/renderer.hpp"
 #include "ui/theme.hpp"
+#include <SDL_image.h>
 #include <cstdio>
 
 namespace xplore {
@@ -10,6 +11,8 @@ bool Renderer::init() {
         return false;
     }
     sdlInited = true;
+
+    IMG_Init(IMG_INIT_PNG | IMG_INIT_JPG);
 
     sdlWindow = SDL_CreateWindow("xplore",
         SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
@@ -33,6 +36,7 @@ bool Renderer::init() {
 void Renderer::shutdown() {
     if (sdlRenderer) { SDL_DestroyRenderer(sdlRenderer); sdlRenderer = nullptr; }
     if (sdlWindow)   { SDL_DestroyWindow(sdlWindow);     sdlWindow   = nullptr; }
+    IMG_Quit();
     if (sdlInited)   { SDL_Quit();                        sdlInited   = false;   }
 }
 
@@ -69,6 +73,25 @@ void Renderer::setClipRect(int x, int y, int w, int h) {
 
 void Renderer::clearClipRect() {
     SDL_RenderSetClipRect(sdlRenderer, nullptr);
+}
+
+SDL_Texture* Renderer::loadTexture(const char* path) {
+    SDL_Surface* surf = IMG_Load(path);
+    if (!surf) {
+        printf("IMG_Load failed (%s): %s\n", path, IMG_GetError());
+        return nullptr;
+    }
+    SDL_Texture* tex = SDL_CreateTextureFromSurface(sdlRenderer, surf);
+    SDL_FreeSurface(surf);
+    if (!tex)
+        printf("SDL_CreateTextureFromSurface failed: %s\n", SDL_GetError());
+    return tex;
+}
+
+void Renderer::drawTexture(SDL_Texture* tex, int x, int y, int w, int h) {
+    if (!tex) return;
+    SDL_Rect dst = {x, y, w, h};
+    SDL_RenderCopy(sdlRenderer, tex, nullptr, &dst);
 }
 
 } // namespace xplore

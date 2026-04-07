@@ -28,7 +28,6 @@ const ListItem* FileList::getSelectedItem() const {
 void FileList::render(Renderer& renderer, FontManager& fontManager,
                       int x, int y, int width, int height, bool active) {
     renderer.setClipRect(x, y, width, height);
-
     renderer.drawRectFilled(x, y, width, height, theme::BG);
 
     // Auto-scroll to keep cursor visible
@@ -39,22 +38,37 @@ void FileList::render(Renderer& renderer, FontManager& fontManager,
     else if (cursorBot > scrollTop + height)
         scrollTop = cursorBot - height;
 
+    // Icon occupies ICON_SIZE width; text starts after icon slot + padding
+    int iconX   = x + theme::PADDING;
+    int textX   = iconX + theme::ICON_SIZE + theme::PADDING_SM;
+
     for (int i = 0; i < (int)items.size(); i++) {
         int iy = y + i * theme::ITEM_H - scrollTop;
 
+        // Skip items outside the visible area
         if (iy + theme::ITEM_H < y || iy > y + height)
             continue;
 
+        // Cursor highlight
         if (active && i == cursor) {
             renderer.drawRectFilled(x, iy, width, theme::ITEM_H,
                                     theme::CURSOR_ROW);
         }
 
+        // Icon (centered vertically within the row)
+        if (items[i].icon) {
+            int iconY = iy + (theme::ITEM_H - theme::ICON_SIZE) / 2;
+            renderer.drawTexture(items[i].icon, iconX, iconY,
+                                 theme::ICON_SIZE, theme::ICON_SIZE);
+        }
+
+        // Label (vertically centered)
         fontManager.drawText(renderer.sdl(), items[i].label.c_str(),
-            x + theme::PADDING,
+            textX,
             iy + (theme::ITEM_H - theme::FONT_SIZE_ITEM) / 2,
             theme::FONT_SIZE_ITEM, theme::TEXT);
 
+        // Bottom divider
         renderer.drawRectFilled(
             x + theme::PADDING, iy + theme::ITEM_H - 1,
             width - theme::PADDING * 2, 1,

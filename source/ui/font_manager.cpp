@@ -3,26 +3,21 @@
 
 namespace xplore {
 
-bool FontManager::init() {
+bool FontManager::init(const char* path) {
     if (TTF_Init() < 0) {
         printf("TTF_Init failed: %s\n", TTF_GetError());
         return false;
     }
     ttfInited = true;
+    fontPath = path;
 
-    Result rc = plInitialize(PlServiceType_User);
-    if (R_FAILED(rc)) {
-        printf("plInitialize failed: 0x%x\n", rc);
+    // Verify the font file is loadable at a test size
+    TTF_Font* test = TTF_OpenFont(fontPath.c_str(), 16);
+    if (!test) {
+        printf("Cannot open font %s: %s\n", fontPath.c_str(), TTF_GetError());
         return false;
     }
-    plInited = true;
-
-    rc = plGetSharedFontByType(&sharedFontData, PlSharedFontType_Standard);
-    if (R_FAILED(rc)) {
-        printf("plGetSharedFontByType failed: 0x%x\n", rc);
-        return false;
-    }
-
+    fontCache[16] = test;
     return true;
 }
 
@@ -31,7 +26,6 @@ void FontManager::shutdown() {
         TTF_CloseFont(font);
     fontCache.clear();
 
-    if (plInited)  { plExit();   plInited  = false; }
     if (ttfInited) { TTF_Quit(); ttfInited = false; }
 }
 
@@ -40,15 +34,9 @@ TTF_Font* FontManager::getFont(int size) {
     if (it != fontCache.end())
         return it->second;
 
-    SDL_RWops* rw = SDL_RWFromMem(sharedFontData.address, sharedFontData.size);
-    if (!rw) {
-        printf("SDL_RWFromMem failed: %s\n", SDL_GetError());
-        return nullptr;
-    }
-
-    TTF_Font* font = TTF_OpenFontRW(rw, 1, size);
+    TTF_Font* font = TTF_OpenFont(fontPath.c_str(), size);
     if (!font) {
-        printf("TTF_OpenFontRW failed (size %d): %s\n", size, TTF_GetError());
+        printf("TTF_OpenFont failed (size %d): %s\n", size, TTF_GetError());
         return nullptr;
     }
 

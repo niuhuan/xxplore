@@ -15,7 +15,7 @@ BUILD		:=	build
 SOURCES		:=	source source/ui
 DATA		:=	data
 INCLUDES	:=	include include/ui
-#ROMFS	:=	romfs
+ROMFS	:=	romfs
 
 APP_TITLE	:=	Xplore
 APP_AUTHOR	:=	niuhuan
@@ -38,7 +38,7 @@ CXXFLAGS	:= $(CFLAGS) -fno-rtti -std=gnu++17
 ASFLAGS	:=	-g $(ARCH)
 LDFLAGS	=	-specs=$(DEVKITPRO)/libnx/switch.specs -g $(ARCH) -Wl,-Map,$(notdir $*.map)
 
-LIBS	:=	-lSDL2_ttf -lSDL2_gfx `sdl2-config --libs` `$(PREFIX)pkg-config --libs freetype2`
+LIBS	:=	-lSDL2_ttf -lSDL2_image -lSDL2_gfx -lpng -ljpeg -lwebp `sdl2-config --libs` `$(PREFIX)pkg-config --libs freetype2`
 
 #---------------------------------------------------------------------------------
 # list of directories containing libraries, this must be the top level containing
