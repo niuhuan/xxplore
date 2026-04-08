@@ -22,6 +22,7 @@ public:
                 std::string share, std::string user, std::string pass);
     ~SmbProvider() override;
 
+    ProviderKind kind() const override { return ProviderKind::Smb; }
     std::string providerId() const override { return id_; }
     std::string displayPrefix() const override;
     bool isReadOnly() const override { return false; }
@@ -37,6 +38,10 @@ public:
                   void* outBuffer, std::string& errOut) override;
     bool writeFile(const std::string& path, const void* data, size_t size,
                    std::string& errOut) override;
+    bool supportsPartialWrite() const override { return true; }
+    bool writeFileChunk(const std::string& path, uint64_t offset,
+                        const void* data, size_t size, bool truncate,
+                        std::string& errOut) override;
 
     /// Connect to the SMB2 share. Must be called before other operations.
     bool connect(std::string& errOut);

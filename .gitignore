@@ -10,6 +10,7 @@ build/
 *.elf
 *.nacp
 *.log
+*.lst
 
 # agents files
 AGENTS.md

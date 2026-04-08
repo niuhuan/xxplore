@@ -29,6 +29,7 @@ enum class MenuCommand {
     ExitApp,
     EditDrive,
     DeleteDrive,
+    UnmountDrive,
 };
 
 /// Per-frame UI state for the bottom sheet (filled by Application).
@@ -55,6 +56,8 @@ struct MainMenuState {
     bool renameIsEdit        = false;
     /// When true, Delete cell fires DeleteDrive command (for network drives in root).
     bool deleteIsDriveDel    = false;
+    /// When true, Delete cell fires UnmountDrive command (for USB drives in root).
+    bool deleteIsUnmount     = false;
 };
 
 /// Bottom-anchored 4-column grid main menu with slide animation.

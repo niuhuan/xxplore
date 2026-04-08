@@ -3,6 +3,8 @@
 #include "fs/clipboard.hpp"
 #include "fs/provider_manager.hpp"
 #include "fs/smb_provider.hpp"
+#include "fs/usb_drive_manager.hpp"
+#include "fs/usb_mount_provider.hpp"
 #include "fs/webdav_provider.hpp"
 #include "i18n/i18n.hpp"
 #include "swkbd_input.hpp"
@@ -128,11 +130,26 @@ static bool fileExists(const std::string& path) {
     return true;
 }
 
+static bool startsWith(const std::string& value, const char* prefix) {
+    return value.rfind(prefix, 0) == 0;
+}
+
+static bool isNetworkProvider(const fs::FileProvider* provider) {
+    if (!provider)
+        return false;
+    return provider->kind() == fs::ProviderKind::WebDav ||
+           provider->kind() == fs::ProviderKind::Smb;
+}
+
+static bool isUsbProvider(const fs::FileProvider* provider) {
+    return provider && provider->kind() == fs::ProviderKind::Usb;
+}
+
 static std::vector<IconEntry> loadIcons(Renderer& renderer) {
     const char* names[] = {
         "folder", "file", "image", "video", "audio",
         "archive", "text", "code", "settings", "download", "back",
-        "network", "add"
+        "network", "add", "sdcard", "usb"
     };
     std::vector<IconEntry> icons;
     for (auto n : names) {
@@ -171,22 +188,30 @@ static bool buildItemsForPath(const std::string& path, const std::vector<IconEnt
         auto roots = provMgr.getRootEntries();
         for (auto& r : roots) {
             const char* iconName = "folder";
-            std::string metadata;
-            // Network providers get the "network" icon and carry drive id as metadata
-            std::string rootPath = r.name + "/";
-            if (provMgr.isNetworkPath(rootPath)) {
+            auto* prov = provMgr.findProviderByDisplayPrefix(r.name);
+            if (prov) {
+                if (prov->kind() == fs::ProviderKind::Local) {
+                    iconName = "sdcard";
+                } else if (isNetworkProvider(prov)) {
+                    iconName = "network";
+                } else if (isUsbProvider(prov)) {
+                    iconName = "usb";
+                }
+            } else if (r.name == "sdmc:") {
+                iconName = "sdcard";
+            } else if (startsWith(r.name, "ums")) {
+                iconName = "usb";
+            } else if (r.name.find("(WebDAV):") != std::string::npos ||
+                       r.name.find("(SMB):") != std::string::npos) {
                 iconName = "network";
-                // Resolve the provider to get its id for metadata
-                std::string relPath;
-                auto* prov = provMgr.resolveProvider(rootPath, relPath);
-                if (prov) metadata = prov->providerId();
             }
             ListItem li;
             li.label = r.name;
             li.icon = findIcon(icons, iconName);
             li.action = ACTION_ENTER;
             li.size = r.size;
-            li.metadata = metadata;
+            if (prov)
+                li.metadata = prov->providerId();
             items.push_back(std::move(li));
         }
         items.push_back({i18n.t("root.websocket_installer"), findIcon(icons, "download"),
@@ -282,7 +307,7 @@ static void renderFooter(Renderer& renderer, FontManager& fontManager, const I18
     }
 }
 
-enum class PendingConfirm { None, DeleteItems, PasteChoice, DeleteDrive };
+enum class PendingConfirm { None, DeleteItems, PasteChoice, DeleteDrive, UnmountDrive };
 
 } // namespace
 
@@ -347,6 +372,22 @@ int Application::run(int argc, char* argv[]) {
         }
         if (prov) provMgr.registerProvider(prov);
     }
+    fs::UsbDriveManager usbDriveManager;
+    std::vector<fs::UsbDriveInfo> usbDrives;
+    {
+        std::string usbErr;
+        if (!usbDriveManager.init(usbErr)) {
+#ifdef XPLORE_DEBUG
+            std::printf("USB: init skipped (%s)\n", usbErr.c_str());
+#endif
+        } else {
+            usbDrives = usbDriveManager.snapshot();
+            for (const auto& drive : usbDrives) {
+                provMgr.registerProvider(std::make_shared<fs::UsbMountProvider>(
+                    drive.providerId, drive.mountName, drive.readOnly));
+            }
+        }
+    }
 
     Toast toast;
     fs::Clipboard clipboard;
@@ -404,6 +445,71 @@ int Application::run(int argc, char* argv[]) {
         share = server.substr(slash + 1);
         server = server.substr(0, slash);
         return !server.empty() && !share.empty();
+    };
+
+    auto providerForRootItem = [&](const ListItem* item) -> fs::FileProvider* {
+        if (!item)
+            return nullptr;
+        if (!item->metadata.empty()) {
+            auto* prov = provMgr.findProvider(item->metadata);
+            if (prov)
+                return prov;
+        }
+        return provMgr.findProviderByDisplayPrefix(item->label);
+    };
+
+    auto applyUsbSnapshot = [&](const std::vector<fs::UsbDriveInfo>& drives,
+                                bool showRemovalToast) {
+        std::vector<std::string> removedPrefixes;
+        for (const auto& existing : usbDrives) {
+            bool stillPresent = false;
+            for (const auto& next : drives) {
+                if (next.providerId == existing.providerId) {
+                    stillPresent = true;
+                    break;
+                }
+            }
+            if (!stillPresent) {
+                removedPrefixes.push_back(existing.mountName);
+                provMgr.removeProvider(existing.providerId);
+            }
+        }
+
+        usbDrives = drives;
+        for (const auto& drive : usbDrives) {
+            provMgr.registerProvider(std::make_shared<fs::UsbMountProvider>(
+                drive.providerId, drive.mountName, drive.readOnly));
+        }
+
+        auto panelUsesRemovedUsb = [&](const PanelState& panel) {
+            if (fs::ProviderManager::isVirtualRoot(panel.path))
+                return false;
+            const std::string prefix = fs::ProviderManager::extractPrefix(panel.path);
+            for (const auto& removed : removedPrefixes)
+                if (prefix == removed)
+                    return true;
+            return false;
+        };
+
+        bool rootChanged = fs::ProviderManager::isVirtualRoot(leftPanel.path) ||
+                           fs::ProviderManager::isVirtualRoot(rightPanel.path);
+        if (rootChanged) {
+            if (fs::ProviderManager::isVirtualRoot(leftPanel.path))
+                reloadPanel(leftPanel, icons, i18n, leftPanel.list.getCursor(), provMgr);
+            if (fs::ProviderManager::isVirtualRoot(rightPanel.path))
+                reloadPanel(rightPanel, icons, i18n, rightPanel.list.getCursor(), provMgr);
+        }
+
+        bool leftRemoved = panelUsesRemovedUsb(leftPanel);
+        bool rightRemoved = panelUsesRemovedUsb(rightPanel);
+        if (leftRemoved)
+            navigatePanel(leftPanel, "/", icons, i18n, provMgr);
+        if (rightRemoved)
+            navigatePanel(rightPanel, "/", icons, i18n, provMgr);
+
+        if (showRemovalToast && (!removedPrefixes.empty()) && !modalConfirm.isOpen()) {
+            toast.show(i18n.t("toast.usb_removed"), "", ToastKind::Info, 2200);
+        }
     };
 
     auto refreshPath = [&](const std::string& dir, int keepCursor) {
@@ -637,7 +743,7 @@ int Application::run(int argc, char* argv[]) {
         FileList& al   = a.list;
 
         if (vr) {
-            // In virtual root: most ops disabled, but check if cursor is on a network drive
+            // In virtual root: most ops disabled, but some drive-level actions remain.
             st.disableSelectToggle = true;
             st.disableRename = true;
             st.disableNewFolder = true;
@@ -646,14 +752,18 @@ int Application::run(int argc, char* argv[]) {
             st.disableViewClip = st.disableClearClip = st.disableInstall = true;
             st.disableSettings = st.disableHelp = st.disableAbout = st.disableExit = false;
 
-            // Check if cursor is on a network drive entry
             const ListItem* cur = al.getSelectedItem();
-            if (cur && !cur->metadata.empty()) {
-                // Cursor is on a network drive → enable Edit and Delete
-                st.renameIsEdit = true;
-                st.deleteIsDriveDel = true;
-                st.disableRename = false;
-                st.disableDelete = false;
+            auto* driveProv = providerForRootItem(cur);
+            if (driveProv) {
+                if (isNetworkProvider(driveProv)) {
+                    st.renameIsEdit = true;
+                    st.deleteIsDriveDel = true;
+                    st.disableRename = false;
+                    st.disableDelete = false;
+                } else if (isUsbProvider(driveProv)) {
+                    st.deleteIsUnmount = true;
+                    st.disableDelete = false;
+                }
             }
 
             char ctxBuf[256];
@@ -770,6 +880,10 @@ int Application::run(int argc, char* argv[]) {
             tap.y = static_cast<int>(touchState.touches[0].y);
         }
         touchWasDown = touchState.count > 0;
+
+        std::vector<fs::UsbDriveInfo> changedUsbDrives;
+        if (usbDriveManager.consumeChanged(changedUsbDrives))
+            applyUsbSnapshot(changedUsbDrives, true);
 
         PanelState& active   = activeRef();
         FileList& activeList = active.list;
@@ -981,6 +1095,23 @@ int Application::run(int argc, char* argv[]) {
                         if (rightAffected)
                             navigatePanel(rightPanel, "/", icons, i18n, provMgr);
                         toast.show(i18n.t("toast.drive_deleted"), "", ToastKind::Success, 2200);
+                    }
+                }
+                if (pendingConfirm == PendingConfirm::UnmountDrive) {
+                    modalConfirm.close();
+                    std::string driveId = pendingDeletePaths.empty() ? "" : pendingDeletePaths[0];
+                    pendingConfirm = PendingConfirm::None;
+                    pendingDeletePaths.clear();
+                    if (!driveId.empty()) {
+                        std::string err;
+                        if (!usbDriveManager.unmountByProviderId(driveId, err)) {
+                            toast.show(i18n.t("error.operation_failed"), err.c_str(),
+                                       ToastKind::Error, 3200);
+                        } else {
+                            applyUsbSnapshot(usbDriveManager.refreshNow(), false);
+                            toast.show(i18n.t("toast.usb_unmounted"), "",
+                                       ToastKind::Success, 2200);
+                        }
                     }
                 }
             } else if (cr == ConfirmResult::Cancelled) {
@@ -1387,10 +1518,10 @@ int Application::run(int argc, char* argv[]) {
             }
             case MenuCommand::EditDrive: {
                 const ListItem* cur = activeList.getSelectedItem();
-                if (!cur || cur->metadata.empty()) break;
-                // Find config for this drive id
+                auto* driveProv = providerForRootItem(cur);
+                if (!driveProv || !isNetworkProvider(driveProv)) break;
                 for (const auto& d : appConfig.networkDrives) {
-                    if (d.id == cur->metadata) {
+                    if (d.id == driveProv->providerId()) {
                         networkDriveForm.openEdit(d);
                         break;
                     }
@@ -1400,15 +1531,27 @@ int Application::run(int argc, char* argv[]) {
             }
             case MenuCommand::DeleteDrive: {
                 const ListItem* cur = activeList.getSelectedItem();
-                if (!cur || cur->metadata.empty()) break;
-                // Store drive id for pending deletion
+                auto* driveProv = providerForRootItem(cur);
+                if (!driveProv || !isNetworkProvider(driveProv)) break;
                 pendingDeletePaths.clear();
-                pendingDeletePaths.push_back(cur->metadata); // reuse for drive id
+                pendingDeletePaths.push_back(driveProv->providerId());
                 savedDeleteDir    = active.path;
                 savedDeleteCursor = activeList.getCursor();
                 modalConfirm.open(i18n.t("confirm.delete_drive_title"),
                                   i18n.t("confirm.delete_drive_body"));
                 pendingConfirm = PendingConfirm::DeleteDrive;
+                mainMenu.close();
+                break;
+            }
+            case MenuCommand::UnmountDrive: {
+                const ListItem* cur = activeList.getSelectedItem();
+                auto* driveProv = providerForRootItem(cur);
+                if (!driveProv || !isUsbProvider(driveProv)) break;
+                pendingDeletePaths.clear();
+                pendingDeletePaths.push_back(driveProv->providerId());
+                modalConfirm.open(i18n.t("confirm.unmount_drive_title"),
+                                  i18n.t("confirm.unmount_drive_body"));
+                pendingConfirm = PendingConfirm::UnmountDrive;
                 mainMenu.close();
                 break;
             }
@@ -1507,6 +1650,7 @@ int Application::run(int argc, char* argv[]) {
     leftPanel.list.destroyCache();
     rightPanel.list.destroyCache();
     webSocketInstallerScreen.close();
+    usbDriveManager.shutdown();
     // Destroy network providers before socket services are torn down.
     provMgr = fs::ProviderManager();
     for (auto& e : icons)

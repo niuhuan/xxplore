@@ -4,6 +4,15 @@
 namespace xplore {
 namespace fs {
 
+bool FileProvider::writeFileChunk(const std::string& path, uint64_t offset,
+                                  const void* data, size_t size, bool truncate,
+                                  std::string& errOut) {
+    if (truncate && offset == 0)
+        return writeFile(path, data, size, errOut);
+    errOut = "partial write unsupported";
+    return false;
+}
+
 bool FileProvider::copyFile(const std::string& src, const std::string& dst,
                             std::string& errOut, const ProviderProgressCb& cb) {
     FileStatInfo info;
@@ -14,19 +23,34 @@ bool FileProvider::copyFile(const std::string& src, const std::string& dst,
         return false;
     }
 
-    static constexpr size_t kChunk = 128 * 1024;
-    std::vector<char> buf(kChunk);
-    uint64_t remaining = info.size;
-    uint64_t offset = 0;
+    if (supportsPartialWrite()) {
+        static constexpr size_t kChunk = 1024 * 1024;
+        std::vector<char> buf(kChunk);
+        uint64_t remaining = info.size;
+        uint64_t offset = 0;
 
-    // Write in chunks via readFile + accumulate, then write all at once
-    // For large files, a streaming approach is better, but writeFile writes atomically.
-    // However for default implementation, we read and write in chunks.
-    // We need a way to append... For default impl, read entire file then write.
-    // This is acceptable for moderate files; providers can override for efficiency.
+        if (remaining == 0)
+            return writeFileChunk(dst, 0, nullptr, 0, true, errOut);
+
+        while (remaining > 0) {
+            size_t chunk = static_cast<size_t>(
+                std::min<uint64_t>(remaining, static_cast<uint64_t>(buf.size())));
+            if (!readFile(src, offset, chunk, buf.data(), errOut))
+                return false;
+            if (cb && !cb(dst)) {
+                errOut = "interrupted";
+                return false;
+            }
+            if (!writeFileChunk(dst, offset, buf.data(), chunk, offset == 0, errOut))
+                return false;
+            offset += chunk;
+            remaining -= chunk;
+        }
+        return true;
+    }
 
     if (info.size > 256ULL * 1024ULL * 1024ULL) {
-        errOut = "file too large for generic copy (>256MB)";
+        errOut = "destination provider does not support streaming writes (>256MB)";
         return false;
     }
 

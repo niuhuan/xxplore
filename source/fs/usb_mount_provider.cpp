@@ -1,47 +1,42 @@
-#include "fs/local_provider.hpp"
+#include "fs/usb_mount_provider.hpp"
 #include "fs/fs_api.hpp"
 #include <cerrno>
 #include <cstdio>
 #include <cstring>
-#include <dirent.h>
-#include <sys/stat.h>
 
-namespace xplore {
-namespace fs {
+namespace xplore::fs {
 
-/// Convert provider-relative path to full sdmc: path.
-static std::string toFull(const std::string& relPath) {
-    return "sdmc:" + relPath;
+std::string UsbMountProvider::toFull(const std::string& relPath) const {
+    return mountPrefix_ + relPath;
 }
 
-std::vector<FileEntry> LocalFileProvider::listDir(const std::string& path,
-                                                  std::string& errOut) {
-    auto result = fs::listDir(toFull(path));
-    return result;
+std::vector<FileEntry> UsbMountProvider::listDir(const std::string& path,
+                                                 std::string& errOut) {
+    (void)errOut;
+    return fs::listDir(toFull(path));
 }
 
-bool LocalFileProvider::statPath(const std::string& path, FileStatInfo& out,
-                                 std::string& errOut) {
+bool UsbMountProvider::statPath(const std::string& path, FileStatInfo& out,
+                                std::string& errOut) {
+    (void)errOut;
     return fs::statPath(toFull(path), out);
 }
 
-bool LocalFileProvider::createDirectory(const std::string& path,
-                                        std::string& errOut) {
+bool UsbMountProvider::createDirectory(const std::string& path, std::string& errOut) {
     return fs::createDirectory(toFull(path), errOut);
 }
 
-bool LocalFileProvider::removeAll(const std::string& path, std::string& errOut) {
+bool UsbMountProvider::removeAll(const std::string& path, std::string& errOut) {
     return fs::removeAll(toFull(path), errOut);
 }
 
-bool LocalFileProvider::renamePath(const std::string& from, const std::string& to,
-                                   std::string& errOut) {
+bool UsbMountProvider::renamePath(const std::string& from, const std::string& to,
+                                  std::string& errOut) {
     return fs::renamePath(toFull(from), toFull(to), errOut);
 }
 
-bool LocalFileProvider::readFile(const std::string& path, uint64_t offset,
-                                 size_t size, void* outBuffer,
-                                 std::string& errOut) {
+bool UsbMountProvider::readFile(const std::string& path, uint64_t offset,
+                                size_t size, void* outBuffer, std::string& errOut) {
     std::string full = toFull(path);
     FILE* f = fopen(full.c_str(), "rb");
     if (!f) {
@@ -65,8 +60,8 @@ bool LocalFileProvider::readFile(const std::string& path, uint64_t offset,
     return true;
 }
 
-bool LocalFileProvider::writeFile(const std::string& path, const void* data,
-                                  size_t size, std::string& errOut) {
+bool UsbMountProvider::writeFile(const std::string& path, const void* data,
+                                 size_t size, std::string& errOut) {
     std::string full = toFull(path);
     FILE* f = fopen(full.c_str(), "wb");
     if (!f) {
@@ -82,9 +77,9 @@ bool LocalFileProvider::writeFile(const std::string& path, const void* data,
     return true;
 }
 
-bool LocalFileProvider::writeFileChunk(const std::string& path, uint64_t offset,
-                                       const void* data, size_t size, bool truncate,
-                                       std::string& errOut) {
+bool UsbMountProvider::writeFileChunk(const std::string& path, uint64_t offset,
+                                      const void* data, size_t size, bool truncate,
+                                      std::string& errOut) {
     std::string full = toFull(path);
     FILE* f = fopen(full.c_str(), truncate ? "wb" : "r+b");
     if (!f && !truncate)
@@ -109,45 +104,36 @@ bool LocalFileProvider::writeFileChunk(const std::string& path, uint64_t offset,
     return true;
 }
 
-bool LocalFileProvider::copyFile(const std::string& src, const std::string& dst,
-                                 std::string& errOut,
-                                 const ProviderProgressCb& cb) {
+bool UsbMountProvider::copyFile(const std::string& src, const std::string& dst,
+                                std::string& errOut, const ProviderProgressCb& cb) {
     ProgressCb adapted = nullptr;
-    if (cb) {
+    if (cb)
         adapted = [&cb](const std::string& f) -> bool { return cb(f); };
-    }
     return fs::copyEntrySimple(toFull(src), toFull(dst), errOut, adapted);
 }
 
-bool LocalFileProvider::moveFile(const std::string& src, const std::string& dst,
-                                 std::string& errOut,
-                                 const ProviderProgressCb& cb) {
+bool UsbMountProvider::moveFile(const std::string& src, const std::string& dst,
+                                std::string& errOut, const ProviderProgressCb& cb) {
     ProgressCb adapted = nullptr;
-    if (cb) {
+    if (cb)
         adapted = [&cb](const std::string& f) -> bool { return cb(f); };
-    }
     return fs::moveEntrySimple(toFull(src), toFull(dst), errOut, adapted);
 }
 
-bool LocalFileProvider::copyEntry(const std::string& src, const std::string& dst,
-                                  std::string& errOut,
-                                  const ProviderProgressCb& cb) {
+bool UsbMountProvider::copyEntry(const std::string& src, const std::string& dst,
+                                 std::string& errOut, const ProviderProgressCb& cb) {
     ProgressCb adapted = nullptr;
-    if (cb) {
+    if (cb)
         adapted = [&cb](const std::string& f) -> bool { return cb(f); };
-    }
     return fs::copyEntrySimple(toFull(src), toFull(dst), errOut, adapted);
 }
 
-bool LocalFileProvider::moveEntry(const std::string& src, const std::string& dst,
-                                  std::string& errOut,
-                                  const ProviderProgressCb& cb) {
+bool UsbMountProvider::moveEntry(const std::string& src, const std::string& dst,
+                                 std::string& errOut, const ProviderProgressCb& cb) {
     ProgressCb adapted = nullptr;
-    if (cb) {
+    if (cb)
         adapted = [&cb](const std::string& f) -> bool { return cb(f); };
-    }
     return fs::moveEntrySimple(toFull(src), toFull(dst), errOut, adapted);
 }
 
-} // namespace fs
-} // namespace xplore
+} // namespace xplore::fs

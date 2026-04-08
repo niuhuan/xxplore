@@ -37,7 +37,8 @@ MenuCommand BottomMainMenu::takeCommand() {
 MenuCommand BottomMainMenu::cmdAt(int row, int col, const MainMenuState& st) const {
     if (row == 2) {
         MenuCommand r1 = st.renameIsEdit   ? MenuCommand::EditDrive   : MenuCommand::Rename;
-        MenuCommand d1 = st.deleteIsDriveDel ? MenuCommand::DeleteDrive : MenuCommand::Delete;
+        MenuCommand d1 = st.deleteIsUnmount ? MenuCommand::UnmountDrive :
+                         (st.deleteIsDriveDel ? MenuCommand::DeleteDrive : MenuCommand::Delete);
         const MenuCommand m[] = {MenuCommand::ToggleSelectMode, r1,
                                  MenuCommand::NewFolder, d1};
         return m[col];
@@ -206,7 +207,8 @@ void BottomMainMenu::update(uint32_t deltaMs, uint64_t kDown, const MainMenuStat
 static const char* labelKey(int row, int col, const MainMenuState& st) {
     if (row == 2) {
         const char* rk = st.renameIsEdit    ? "menu.edit"         : "menu.rename";
-        const char* dk = st.deleteIsDriveDel ? "menu.delete_drive" : "menu.delete";
+        const char* dk = st.deleteIsUnmount ? "menu.unmount_drive" :
+                         (st.deleteIsDriveDel ? "menu.delete_drive" : "menu.delete");
         const char* k[] = {"menu.select_toggle", rk, "menu.new_folder", dk};
         return k[col];
     }

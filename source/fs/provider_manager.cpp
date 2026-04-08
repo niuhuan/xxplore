@@ -1,5 +1,6 @@
 #include "fs/provider_manager.hpp"
 #include "fs/local_provider.hpp"
+#include "fs/webdav_provider.hpp"
 #include <algorithm>
 #include <cstdio>
 
@@ -34,6 +35,13 @@ void ProviderManager::removeProvider(const std::string& providerId) {
 FileProvider* ProviderManager::findProvider(const std::string& providerId) {
     for (auto& p : providers_)
         if (p->providerId() == providerId)
+            return p.get();
+    return nullptr;
+}
+
+FileProvider* ProviderManager::findProviderByDisplayPrefix(const std::string& displayPrefix) {
+    for (auto& p : providers_)
+        if (p->displayPrefix() == displayPrefix)
             return p.get();
     return nullptr;
 }
@@ -209,8 +217,12 @@ bool ProviderManager::isNetworkPath(const std::string& fullPath) const {
     std::string prefix = extractPrefix(fullPath);
     if (prefix.empty())
         return false;
-    // Local provider prefix is "sdmc:"
-    return prefix != "sdmc:";
+    for (const auto& p : providers_) {
+        if (p->displayPrefix() != prefix)
+            continue;
+        return p->kind() == ProviderKind::WebDav || p->kind() == ProviderKind::Smb;
+    }
+    return false;
 }
 
 // --- Cross-provider copy ---
@@ -226,25 +238,57 @@ bool ProviderManager::crossProviderCopy(FileProvider* srcProv,
         return false;
 
     if (!srcInfo.isDirectory) {
-        // File: stream copy in chunks
         if (cb && !cb(srcRel)) {
             errOut = "interrupted";
             return false;
         }
 
-        // For files up to 256MB, read all at once; larger files use chunked writes
-        if (srcInfo.size <= 256ULL * 1024 * 1024) {
-            std::vector<char> buf(static_cast<size_t>(srcInfo.size));
-            if (srcInfo.size > 0) {
-                if (!srcProv->readFile(srcRel, 0, static_cast<size_t>(srcInfo.size),
-                                       buf.data(), errOut))
+        if (dstProv->kind() == ProviderKind::WebDav) {
+            auto* webdavDst = static_cast<WebDavProvider*>(dstProv);
+            return webdavDst->uploadFromProvider(srcProv, srcRel, dstRel, srcInfo.size,
+                                                 errOut, cb);
+        }
+
+        if (dstProv->supportsPartialWrite()) {
+            static constexpr size_t kChunk = 1024 * 1024;
+            std::vector<char> buf(kChunk);
+            uint64_t remaining = srcInfo.size;
+            uint64_t offset = 0;
+
+            if (remaining == 0)
+                return dstProv->writeFileChunk(dstRel, 0, nullptr, 0, true, errOut);
+
+            while (remaining > 0) {
+                size_t chunk = static_cast<size_t>(
+                    std::min<uint64_t>(remaining, static_cast<uint64_t>(buf.size())));
+                if (!srcProv->readFile(srcRel, offset, chunk, buf.data(), errOut))
                     return false;
+                if (cb && !cb(dstRel)) {
+                    errOut = "interrupted";
+                    return false;
+                }
+                if (!dstProv->writeFileChunk(dstRel, offset, buf.data(), chunk,
+                                             offset == 0, errOut)) {
+                    return false;
+                }
+                offset += chunk;
+                remaining -= chunk;
             }
-            return dstProv->writeFile(dstRel, buf.data(), buf.size(), errOut);
-        } else {
-            errOut = "file too large for cross-provider copy (>256MB)";
+            return true;
+        }
+
+        if (srcInfo.size > 256ULL * 1024 * 1024) {
+            errOut = "destination provider does not support streaming writes (>256MB)";
             return false;
         }
+
+        std::vector<char> buf(static_cast<size_t>(srcInfo.size));
+        if (srcInfo.size > 0) {
+            if (!srcProv->readFile(srcRel, 0, static_cast<size_t>(srcInfo.size),
+                                   buf.data(), errOut))
+                return false;
+        }
+        return dstProv->writeFile(dstRel, buf.data(), buf.size(), errOut);
     }
 
     // Directory: create on dst, recurse

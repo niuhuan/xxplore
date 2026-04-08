@@ -11,10 +11,19 @@ namespace fs {
 /// Callback for long operations. Return true to continue, false to interrupt.
 using ProviderProgressCb = std::function<bool(const std::string& currentFile)>;
 
+enum class ProviderKind {
+    Local,
+    WebDav,
+    Smb,
+    Usb,
+};
+
 /// Abstract file system provider. Implementations wrap local FS, WebDAV, SMB2, etc.
 class FileProvider {
 public:
     virtual ~FileProvider() = default;
+
+    virtual ProviderKind kind() const = 0;
 
     /// Unique identifier for this provider instance (e.g. "local", "webdav-abc123").
     virtual std::string providerId() const = 0;
@@ -54,6 +63,15 @@ public:
     /// Write full file from buffer. Creates or overwrites.
     virtual bool writeFile(const std::string& path, const void* data, size_t size,
                            std::string& errOut) = 0;
+
+    /// Whether this provider supports chunked writes at arbitrary offsets.
+    virtual bool supportsPartialWrite() const { return false; }
+
+    /// Write a chunk to a file at a specific offset.
+    /// When @p truncate is true, the destination must be recreated/truncated first.
+    virtual bool writeFileChunk(const std::string& path, uint64_t offset,
+                                const void* data, size_t size, bool truncate,
+                                std::string& errOut);
 
     /// Copy a single file within this provider. Default implementation uses readFile+writeFile.
     virtual bool copyFile(const std::string& src, const std::string& dst,

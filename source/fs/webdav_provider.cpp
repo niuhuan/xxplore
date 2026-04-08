@@ -51,6 +51,40 @@ size_t curlReadCb(void* ptr, size_t size, size_t nmemb, void* userdata) {
     return toSend;
 }
 
+struct ProviderReadCtx {
+    FileProvider* srcProv = nullptr;
+    const std::string* srcPath = nullptr;
+    const ProviderProgressCb* progressCb = nullptr;
+    uint64_t offset = 0;
+    uint64_t remaining = 0;
+    std::string error;
+};
+
+size_t curlProviderReadCb(void* ptr, size_t size, size_t nmemb, void* userdata) {
+    auto* ctx = static_cast<ProviderReadCtx*>(userdata);
+    if (!ctx || !ctx->srcProv || !ctx->srcPath)
+        return CURL_READFUNC_ABORT;
+
+    if (ctx->remaining == 0)
+        return 0;
+
+    size_t maxBytes = size * nmemb;
+    size_t toRead = static_cast<size_t>(
+        std::min<uint64_t>(ctx->remaining, static_cast<uint64_t>(maxBytes)));
+
+    if (ctx->progressCb && *ctx->progressCb && !(*ctx->progressCb)(*ctx->srcPath)) {
+        ctx->error = "interrupted";
+        return CURL_READFUNC_ABORT;
+    }
+
+    if (!ctx->srcProv->readFile(*ctx->srcPath, ctx->offset, toRead, ptr, ctx->error))
+        return CURL_READFUNC_ABORT;
+
+    ctx->offset += toRead;
+    ctx->remaining -= toRead;
+    return toRead;
+}
+
 // Minimal XML parsing helpers (no dependency on libxml)
 // We only need to extract href, content-length, resource-type from PROPFIND responses
 
@@ -399,6 +433,59 @@ WebDavProvider::CurlResult WebDavProvider::performGet(const std::string& url,
     return result;
 }
 
+WebDavProvider::CurlResult WebDavProvider::performStreamPut(const std::string& url,
+                                                            FileProvider* srcProv,
+                                                            const std::string& srcPath,
+                                                            uint64_t size,
+                                                            const ProviderProgressCb& cb) {
+    CurlResult result;
+    debugLog("PUT(stream) url=%s size=%llu", url.c_str(),
+             static_cast<unsigned long long>(size));
+
+    CURL* curl = curl_easy_init();
+    if (!curl) {
+        result.error = "curl_easy_init failed";
+        return result;
+    }
+
+    ProviderReadCtx readCtx;
+    readCtx.srcProv = srcProv;
+    readCtx.srcPath = &srcPath;
+    readCtx.progressCb = &cb;
+    readCtx.offset = 0;
+    readCtx.remaining = size;
+
+    curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
+    curl_easy_setopt(curl, CURLOPT_UPLOAD, 1L);
+    curl_easy_setopt(curl, CURLOPT_CUSTOMREQUEST, "PUT");
+    curl_easy_setopt(curl, CURLOPT_READFUNCTION, curlProviderReadCb);
+    curl_easy_setopt(curl, CURLOPT_READDATA, &readCtx);
+    curl_easy_setopt(curl, CURLOPT_INFILESIZE_LARGE, static_cast<curl_off_t>(size));
+    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, curlWriteCb);
+    curl_easy_setopt(curl, CURLOPT_WRITEDATA, &result.body);
+    curl_easy_setopt(curl, CURLOPT_TIMEOUT, 0L);
+    curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 10L);
+
+    if (!user_.empty()) {
+        curl_easy_setopt(curl, CURLOPT_USERNAME, user_.c_str());
+        curl_easy_setopt(curl, CURLOPT_PASSWORD, pass_.c_str());
+        curl_easy_setopt(curl, CURLOPT_HTTPAUTH, CURLAUTH_BASIC | CURLAUTH_DIGEST);
+    }
+
+    CURLcode rc = curl_easy_perform(curl);
+    if (rc != CURLE_OK) {
+        result.error = !readCtx.error.empty() ? readCtx.error : curl_easy_strerror(rc);
+    } else {
+        curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &result.httpCode);
+    }
+    debugLog("PUT(stream) done url=%s http=%ld err=%s body=%zu", url.c_str(),
+             result.httpCode, result.error.empty() ? "-" : result.error.c_str(),
+             result.body.size());
+
+    curl_easy_cleanup(curl);
+    return result;
+}
+
 // --- PROPFIND XML parsing ---
 
 std::vector<FileEntry> WebDavProvider::parsePropfindResponse(const std::string& xml,
@@ -687,6 +774,30 @@ bool WebDavProvider::writeFile(const std::string& path, const void* data, size_t
                                std::string& errOut) {
     std::string url = makeUrl(path);
     auto res = performRequest("PUT", url, data, size);
+    if (!res.error.empty()) {
+        errOut = res.error;
+        return false;
+    }
+    if (res.httpCode != 200 && res.httpCode != 201 && res.httpCode != 204) {
+        char buf[64];
+        std::snprintf(buf, sizeof(buf), "PUT HTTP %ld", res.httpCode);
+        errOut = buf;
+        return false;
+    }
+    return true;
+}
+
+bool WebDavProvider::uploadFromProvider(FileProvider* srcProv, const std::string& srcPath,
+                                        const std::string& dstPath, uint64_t size,
+                                        std::string& errOut,
+                                        const ProviderProgressCb& cb) {
+    if (!srcProv) {
+        errOut = "missing source provider";
+        return false;
+    }
+
+    std::string url = makeUrl(dstPath);
+    auto res = performStreamPut(url, srcProv, srcPath, size, cb);
     if (!res.error.empty()) {
         errOut = res.error;
         return false;

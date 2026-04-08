@@ -30,6 +30,9 @@ public:
     /// Find a provider by its id. Returns nullptr if not found.
     FileProvider* findProvider(const std::string& providerId);
 
+    /// Find a provider by its display prefix exactly as shown in Root.
+    FileProvider* findProviderByDisplayPrefix(const std::string& displayPrefix);
+
     /// Resolve a full path to (provider, relativePath). Returns nullptr if virtual root or unknown.
     FileProvider* resolveProvider(const std::string& fullPath, std::string& outRelativePath);
 

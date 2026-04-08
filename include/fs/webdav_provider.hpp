@@ -17,6 +17,7 @@ public:
                    std::string user, std::string pass);
     ~WebDavProvider() override;
 
+    ProviderKind kind() const override { return ProviderKind::WebDav; }
     std::string providerId() const override { return id_; }
     std::string displayPrefix() const override;
     bool isReadOnly() const override { return false; }
@@ -32,6 +33,10 @@ public:
                   void* outBuffer, std::string& errOut) override;
     bool writeFile(const std::string& path, const void* data, size_t size,
                    std::string& errOut) override;
+    bool uploadFromProvider(FileProvider* srcProv, const std::string& srcPath,
+                            const std::string& dstPath, uint64_t size,
+                            std::string& errOut,
+                            const ProviderProgressCb& cb = nullptr);
 
     /// Test connectivity (PROPFIND on root). Returns true if successful.
     bool testConnection(std::string& errOut);
@@ -56,6 +61,9 @@ private:
     CurlResult performRequest(const std::string& method, const std::string& url,
                               const void* sendData = nullptr, size_t sendSize = 0);
     CurlResult performGet(const std::string& url, uint64_t offset, size_t size);
+    CurlResult performStreamPut(const std::string& url, FileProvider* srcProv,
+                                const std::string& srcPath, uint64_t size,
+                                const ProviderProgressCb& cb);
 
     /// Parse PROPFIND XML response into entries.
     std::vector<FileEntry> parsePropfindResponse(const std::string& xml,

@@ -3,7 +3,7 @@ Generate Material-Design-style file-type icon PNGs (48x48, on transparent).
 Uses only Pillow drawing primitives — no external resources needed.
 Output: romfs/icons/*.png
 
-Icons: folder, file, image, video, audio, archive, text, code, settings, download, back
+Icons: folder, file, image, video, audio, archive, text, code, settings, download, back, network, add, sdcard, usb
 """
 
 import os
@@ -174,6 +174,32 @@ def icon_add():
     return img
 
 
+def icon_sdcard():
+    img = new_img()
+    d = ImageDraw.Draw(img)
+    body = (150, 150, 160, 255)
+    pin = ACCENT
+    d.rounded_rectangle([12, 8, 36, 40], radius=4, outline=body, width=2)
+    d.polygon([(18, 8), (30, 8), (34, 14), (14, 14)], fill=body)
+    for x in range(16, 33, 4):
+        d.line([(x, 10), (x, 17)], fill=pin, width=2)
+    d.rounded_rectangle([17, 22, 31, 34], radius=2, outline=pin, width=2)
+    return img
+
+
+def icon_usb():
+    img = new_img()
+    d = ImageDraw.Draw(img)
+    color = (88, 196, 143, 255)
+    d.rounded_rectangle([14, 10, 34, 38], radius=6, outline=color, width=2)
+    d.rectangle([19, 6, 29, 12], outline=color, width=2)
+    d.line([(24, 20), (24, 31)], fill=color, width=3)
+    d.line([(20, 24), (28, 24)], fill=color, width=3)
+    d.line([(24, 31), (18, 37)], fill=color, width=2)
+    d.line([(24, 31), (30, 37)], fill=color, width=2)
+    return img
+
+
 def main():
     os.makedirs(OUT_DIR, exist_ok=True)
 
@@ -191,6 +217,8 @@ def main():
         "back": icon_back,
         "network": icon_network,
         "add": icon_add,
+        "sdcard": icon_sdcard,
+        "usb": icon_usb,
     }
 
     for name, gen_fn in icons.items():

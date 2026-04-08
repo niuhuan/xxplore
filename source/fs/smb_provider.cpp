@@ -410,5 +410,70 @@ retry_write:
     return false;
 }
 
+bool SmbProvider::writeFileChunk(const std::string& path, uint64_t offset,
+                                 const void* data, size_t size, bool truncate,
+                                 std::string& errOut) {
+    std::string sp = smbPath(path);
+    for (int attempt = 0; attempt < 2; ++attempt) {
+        if (!ensureConnected(errOut))
+            return false;
+
+        int flags = O_WRONLY | O_CREAT | (truncate ? O_TRUNC : 0);
+        struct smb2fh* fh = smb2_open(smb2_, sp.c_str(), flags);
+        if (!fh) {
+            errOut = smb2_get_error(smb2_);
+            if (attempt == 0 && shouldReconnect(errOut)) {
+                if (!reconnect(errOut))
+                    return false;
+                continue;
+            }
+            return false;
+        }
+
+        if (offset > 0) {
+            int64_t seekResult = smb2_lseek(smb2_, fh, static_cast<int64_t>(offset), SEEK_SET, nullptr);
+            if (seekResult < 0) {
+                errOut = smb2_get_error(smb2_);
+                smb2_close(smb2_, fh);
+                if (attempt == 0 && shouldReconnect(errOut)) {
+                    if (!reconnect(errOut))
+                        return false;
+                    continue;
+                }
+                return false;
+            }
+        }
+
+        size_t totalWritten = 0;
+        const auto* buf = static_cast<const uint8_t*>(data);
+        while (totalWritten < size) {
+            size_t chunk = std::min(size - totalWritten, static_cast<size_t>(256 * 1024));
+            int n = smb2_write(smb2_, fh, buf + totalWritten, static_cast<uint32_t>(chunk));
+            if (n < 0) {
+                errOut = smb2_get_error(smb2_);
+                smb2_close(smb2_, fh);
+                if (attempt == 0 && shouldReconnect(errOut)) {
+                    if (!reconnect(errOut))
+                        return false;
+                    goto retry_write_chunk;
+                }
+                return false;
+            }
+            if (n == 0) {
+                errOut = "smb2_write returned 0";
+                smb2_close(smb2_, fh);
+                return false;
+            }
+            totalWritten += static_cast<size_t>(n);
+        }
+
+        smb2_close(smb2_, fh);
+        return true;
+retry_write_chunk:
+        continue;
+    }
+    return false;
+}
+
 } // namespace fs
 } // namespace xplore

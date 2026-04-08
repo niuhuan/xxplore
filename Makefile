@@ -47,6 +47,13 @@ LIBS	+=	-lzstd
 LIBS	+=	`$(PREFIX)pkg-config --libs libcurl` -lmbedtls -lmbedx509 -lmbedcrypto
 
 LIBS	+=	-lsmb2
+ifeq ($(findstring -DXPLORE_DEBUG,$(DEFINES)),-DXPLORE_DEBUG)
+LIBS	+=	-lusbhsfsd
+else
+LIBS	+=	-lusbhsfs
+endif
+LIBS	+=	-lntfs-3g -llwext4
+LIBS	+=	-lnx
 
 #---------------------------------------------------------------------------------
 # list of directories containing libraries, this must be the top level containing
