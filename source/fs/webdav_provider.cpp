@@ -518,6 +518,7 @@ std::vector<FileEntry> WebDavProvider::listDir(const std::string& path, std::str
             urlPath = url.substr(pathStart);
     }
     if (urlPath.empty()) urlPath = "/";
+    urlPath = urlDecode(urlPath);
 
     auto entries = parsePropfindResponse(res.body, urlPath);
     debugLog("listDir done rel=%s count=%zu", path.c_str(), entries.size());

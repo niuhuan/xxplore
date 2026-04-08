@@ -31,6 +31,7 @@ public:
 private:
     /// Open (or return cached) TTF_Font for the requested point size.
     TTF_Font* getFont(int size);
+    std::string sanitizeText(TTF_Font* font, const char* text);
 
     std::string fontPath;
     std::unordered_map<int, TTF_Font*> fontCache;
