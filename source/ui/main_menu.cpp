@@ -288,6 +288,7 @@ void BottomMainMenu::render(Renderer& renderer, FontManager& fm, const I18n& i18
 
     // --- Grid cells ---
     int cellW = (mw - MENU_PADDING * 2) / 4;
+    constexpr int kCellTextPadX = 20;
     for (int row = 2; row <= 5; row++) {
         // Divider between row groups (before rows 3, 4, 5)
         if (row > 2) {
@@ -308,9 +309,9 @@ void BottomMainMenu::render(Renderer& renderer, FontManager& fm, const I18n& i18
             const char* key = labelKey(row, col, st);
             if (!key || !key[0]) continue;
             SDL_Color colr = dis ? TEXT_DISABLED : (foc ? PRIMARY : MENU_ITEM_TEXT);
-            fm.drawTextEllipsis(renderer.sdl(), i18n.t(key), cx + 8,
+            fm.drawTextEllipsis(renderer.sdl(), i18n.t(key), cx + kCellTextPadX,
                                 cy + (MENU_SHEET_CELL_H - FONT_SIZE_SMALL) / 2, FONT_SIZE_SMALL,
-                                colr, cellW - 16);
+                                colr, cellW - kCellTextPadX * 2);
         }
     }
 }

@@ -44,13 +44,15 @@ int languageIndexFromValue(config::AppLanguage language) {
 
 } // namespace
 
-void SettingsScreen::open(config::AppLanguage currentLanguage) {
+void SettingsScreen::open(config::AppLanguage currentLanguage, bool touchButtonsEnabled) {
     open_ = true;
     currentLanguage_ = currentLanguage;
     selectedLanguage_ = currentLanguage;
+    touchButtonsEnabled_ = touchButtonsEnabled;
     int index = languageIndexFromValue(currentLanguage);
     focusRow_ = 0;
     languageFocusCol_ = index;
+    touchButtonsFocusCol_ = touchButtonsEnabled_ ? 1 : 0;
     buttonFocusCol_ = 0;
 }
 
@@ -64,13 +66,23 @@ int SettingsScreen::languageIndex(int col) const {
     return col;
 }
 
-void SettingsScreen::moveLanguageHorizontal(int delta) {
-    if (focusRow_ == 1) {
+void SettingsScreen::moveHorizontal(int delta) {
+    if (focusRow_ == 2) {
         buttonFocusCol_ += delta;
         if (buttonFocusCol_ < 0)
             buttonFocusCol_ = 1;
         if (buttonFocusCol_ > 1)
             buttonFocusCol_ = 0;
+        return;
+    }
+
+    if (focusRow_ == 1) {
+        touchButtonsFocusCol_ += delta;
+        if (touchButtonsFocusCol_ < 0)
+            touchButtonsFocusCol_ = 1;
+        if (touchButtonsFocusCol_ > 1)
+            touchButtonsFocusCol_ = 0;
+        touchButtonsEnabled_ = touchButtonsFocusCol_ == 1;
         return;
     }
 
@@ -95,15 +107,25 @@ void SettingsScreen::moveVertical(int delta) {
     if (delta == 0)
         return;
 
-    if (focusRow_ == 1) {
+    if (focusRow_ == 2) {
         if (delta < 0)
-            focusRow_ = 0;
+            focusRow_ = 1;
         return;
     }
 
-    if (delta > 0) {
+    if (focusRow_ == 1) {
+        if (delta < 0) {
+            focusRow_ = 0;
+        } else {
+            focusRow_ = 2;
+            buttonFocusCol_ = 0;
+        }
+        return;
+    }
+
+    if (focusRow_ == 0 && delta > 0) {
         focusRow_ = 1;
-        buttonFocusCol_ = 0;
+        touchButtonsFocusCol_ = touchButtonsEnabled_ ? 1 : 0;
         return;
     }
 }
@@ -121,7 +143,12 @@ SettingsAction SettingsScreen::handleInput(uint64_t kDown, const TouchTap* tap) 
     const int gap = 10;
     const int cellW = (cardW - 48 - gap * (gridCols - 1)) / gridCols;
     const int cellH = 54;
-    const int buttonY = gridY + cellH + 24;
+    const int touchButtonsLabelY = gridY + cellH + 28;
+    const int touchButtonsY = touchButtonsLabelY + 24;
+    const int toggleW = 160;
+    const int toggleH = 44;
+    const int toggleGap = 16;
+    const int buttonY = touchButtonsY + toggleH + 28;
     const int buttonW = 200;
     const int buttonH = 44;
     const int buttonGap = 18;
@@ -140,13 +167,26 @@ SettingsAction SettingsScreen::handleInput(uint64_t kDown, const TouchTap* tap) 
             }
         }
 
-        if (pointInRect(tap, x, buttonY, buttonW, buttonH)) {
+        if (pointInRect(tap, x, touchButtonsY, toggleW, toggleH)) {
             focusRow_ = 1;
+            touchButtonsFocusCol_ = 0;
+            touchButtonsEnabled_ = false;
+            return SettingsAction::None;
+        }
+        if (pointInRect(tap, x + toggleW + toggleGap, touchButtonsY, toggleW, toggleH)) {
+            focusRow_ = 1;
+            touchButtonsFocusCol_ = 1;
+            touchButtonsEnabled_ = true;
+            return SettingsAction::None;
+        }
+
+        if (pointInRect(tap, x, buttonY, buttonW, buttonH)) {
+            focusRow_ = 2;
             buttonFocusCol_ = 0;
             return SettingsAction::Close;
         }
         if (pointInRect(tap, x + buttonW + buttonGap, buttonY, buttonW, buttonH)) {
-            focusRow_ = 1;
+            focusRow_ = 2;
             buttonFocusCol_ = 1;
             return SettingsAction::Save;
         }
@@ -162,13 +202,18 @@ SettingsAction SettingsScreen::handleInput(uint64_t kDown, const TouchTap* tap) 
     if (kDown & HidNpadButton_AnyDown)
         moveVertical(1);
     if (kDown & HidNpadButton_AnyLeft)
-        moveLanguageHorizontal(-1);
+        moveHorizontal(-1);
     if (kDown & HidNpadButton_AnyRight)
-        moveLanguageHorizontal(1);
+        moveHorizontal(1);
 
     if (kDown & HidNpadButton_A) {
-        if (focusRow_ == 1)
+        if (focusRow_ == 2)
             return buttonFocusCol_ == 0 ? SettingsAction::Close : SettingsAction::Save;
+
+        if (focusRow_ == 1) {
+            touchButtonsEnabled_ = touchButtonsFocusCol_ == 1;
+            return SettingsAction::None;
+        }
 
         int index = languageIndex(languageFocusCol_);
         if (index >= 0)
@@ -240,7 +285,48 @@ void SettingsScreen::render(Renderer& renderer, FontManager& fm, const I18n& i18
                             theme::FONT_SIZE_SMALL, text, cellW - 20);
     }
 
-    const int buttonY = y + cellH + 24;
+    const int touchButtonsLabelY = y + cellH + 28;
+    fm.drawText(renderer.sdl(), i18n.t("settings.touch_buttons"), x, touchButtonsLabelY,
+                theme::FONT_SIZE_SMALL, theme::TEXT_SECONDARY);
+
+    const int touchButtonsY = touchButtonsLabelY + 24;
+    const int toggleW = 160;
+    const int toggleH = 44;
+    const int toggleGap = 16;
+    struct ToggleCell {
+        const char* label;
+        bool active;
+        bool focused;
+        int x;
+    };
+    const ToggleCell toggles[] = {
+        {i18n.t("settings.off"), !touchButtonsEnabled_,
+         focusRow_ == 1 && touchButtonsFocusCol_ == 0, x},
+        {i18n.t("settings.on"), touchButtonsEnabled_,
+         focusRow_ == 1 && touchButtonsFocusCol_ == 1, x + toggleW + toggleGap},
+    };
+    for (const auto& cell : toggles) {
+        SDL_Color bg = theme::SURFACE;
+        SDL_Color border = theme::DIVIDER;
+        SDL_Color text = theme::TEXT;
+
+        if (cell.active) {
+            bg = withAlpha(theme::PRIMARY, cell.focused ? 0xff : 0x66);
+            border = cell.focused ? theme::PRIMARY : theme::PRIMARY_DIM;
+            text = cell.focused ? theme::ON_PRIMARY : theme::PRIMARY;
+        } else if (cell.focused) {
+            bg = theme::SURFACE_HOVER;
+            border = theme::PRIMARY;
+        }
+
+        renderer.drawRoundedRectFilled(cell.x, touchButtonsY, toggleW, toggleH, 10, bg);
+        renderer.drawRoundedRect(cell.x, touchButtonsY, toggleW, toggleH, 10, border);
+        fm.drawText(renderer.sdl(), cell.label, cell.x + 16,
+                    touchButtonsY + (toggleH - theme::FONT_SIZE_ITEM) / 2,
+                    theme::FONT_SIZE_ITEM, text);
+    }
+
+    const int buttonY = touchButtonsY + toggleH + 28;
     const int buttonW = 200;
     const int buttonH = 44;
     const int buttonGap = 18;
@@ -250,8 +336,8 @@ void SettingsScreen::render(Renderer& renderer, FontManager& fm, const I18n& i18
         int         x;
     };
     const ButtonCell buttons[] = {
-        {i18n.t("settings.discard"), focusRow_ == 1 && buttonFocusCol_ == 0, x},
-        {i18n.t("settings.save"), focusRow_ == 1 && buttonFocusCol_ == 1, x + buttonW + buttonGap},
+        {i18n.t("settings.discard"), focusRow_ == 2 && buttonFocusCol_ == 0, x},
+        {i18n.t("settings.save"), focusRow_ == 2 && buttonFocusCol_ == 1, x + buttonW + buttonGap},
     };
     for (const auto& cell : buttons) {
         SDL_Color bg = cell.focused ? theme::PRIMARY_DIM : theme::SURFACE;

@@ -76,6 +76,21 @@ struct HeaderIconLayout {
     int iconSize = 0;
 };
 
+struct FooterTouchButtonsLayout {
+    bool enabled = false;
+    int prevX = 0;
+    int nextX = 0;
+    int pageW = 0;
+    int selectAllX = 0;
+    int selectAllW = 0;
+    int selectX = 0;
+    int selectW = 0;
+    int y = 0;
+    int h = 0;
+    int contentLeft = 0;
+    int contentRight = 0;
+};
+
 struct PanelState {
     std::string      path;
     xplore::FileList list;
@@ -211,6 +226,61 @@ static HeaderIconLayout headerIconLayout() {
     return layout;
 }
 
+static FooterTouchButtonsLayout footerTouchButtonsLayout(bool enabled) {
+    FooterTouchButtonsLayout layout;
+    if (!enabled) {
+        layout.contentLeft = theme::PADDING;
+        layout.contentRight = theme::SCREEN_W - theme::PADDING;
+        return layout;
+    }
+
+    constexpr int kButtonGap = 12;
+    constexpr int kSidePadding = 14;
+    layout.enabled = true;
+    layout.pageW = 42;
+    layout.selectW = 42;
+    layout.selectAllW = 42;
+    layout.h = 28;
+    layout.y = theme::HEADER_H + theme::PANEL_CONTENT_H + (theme::FOOTER_H - layout.h) / 2;
+    layout.prevX = kSidePadding;
+    layout.nextX = layout.prevX + layout.pageW + kButtonGap;
+    layout.selectX = theme::SCREEN_W - kSidePadding - layout.selectW;
+    layout.selectAllX = layout.selectX - kButtonGap - layout.selectAllW;
+    layout.contentLeft = layout.nextX + layout.pageW + 20;
+    layout.contentRight = layout.selectAllX - 20;
+    return layout;
+}
+
+static void drawThickChevron(Renderer& renderer, int x, int y, int w, int h, bool left,
+                             SDL_Color color) {
+    int cx = x + w / 2;
+    int cy = y + h / 2;
+    int halfH = 7;
+    int halfW = 4;
+    int dir = left ? -1 : 1;
+    for (int offset = -1; offset <= 1; ++offset) {
+        renderer.drawLine(cx + dir * halfW, cy - halfH + offset, cx - dir * halfW, cy + offset,
+                          color);
+        renderer.drawLine(cx - dir * halfW, cy + offset, cx + dir * halfW, cy + halfH + offset,
+                          color);
+    }
+}
+
+static void drawSelectIcon(Renderer& renderer, int x, int y, int w, int h, SDL_Color color,
+                           bool multiple) {
+    int frontW = 11;
+    int frontH = 11;
+    int frontX = x + (w - frontW) / 2 + (multiple ? 2 : 0);
+    int frontY = y + (h - frontH) / 2 + (multiple ? 1 : 0);
+    if (multiple)
+        renderer.drawRect(frontX - 4, frontY - 3, frontW, frontH, color);
+    renderer.drawRect(frontX, frontY, frontW, frontH, color);
+    renderer.drawLine(frontX + 2, frontY + 6, frontX + 5, frontY + 9, color);
+    renderer.drawLine(frontX + 5, frontY + 9, frontX + 10, frontY + 3, color);
+    renderer.drawLine(frontX + 2, frontY + 7, frontX + 5, frontY + 10, color);
+    renderer.drawLine(frontX + 5, frontY + 10, frontX + 10, frontY + 4, color);
+}
+
 static bool parseSmbAddress(const std::string& address, std::string& server,
                             std::string& share) {
     server = address;
@@ -309,11 +379,40 @@ static bool reloadPanel(PanelState& panel, const std::vector<IconEntry>& icons,
     return true;
 }
 
-static void renderFooter(Renderer& renderer, FontManager& fontManager, const I18n& i18n) {
+static void renderFooter(Renderer& renderer, FontManager& fontManager, const I18n& i18n,
+                         bool touchButtonsEnabled) {
     using namespace theme;
     int footerY = HEADER_H + PANEL_CONTENT_H;
     renderer.drawRectFilled(0, footerY, SCREEN_W, FOOTER_H, HEADER_BG);
     renderer.drawRectFilled(0, footerY, SCREEN_W, 1, DIVIDER);
+
+    const FooterTouchButtonsLayout touchLayout = footerTouchButtonsLayout(touchButtonsEnabled);
+    if (touchLayout.enabled) {
+        struct FooterButton {
+            int x;
+            int w;
+        };
+        const FooterButton buttons[] = {
+            {touchLayout.prevX, touchLayout.pageW},
+            {touchLayout.nextX, touchLayout.pageW},
+            {touchLayout.selectAllX, touchLayout.selectAllW},
+            {touchLayout.selectX, touchLayout.selectW},
+        };
+        for (const auto& button : buttons) {
+            renderer.drawRoundedRectFilled(button.x, touchLayout.y, button.w, touchLayout.h, 8,
+                                           SURFACE);
+            renderer.drawRoundedRect(button.x, touchLayout.y, button.w, touchLayout.h, 8,
+                                     DIVIDER);
+        }
+        drawThickChevron(renderer, touchLayout.prevX, touchLayout.y, touchLayout.pageW,
+                         touchLayout.h, true, PRIMARY);
+        drawThickChevron(renderer, touchLayout.nextX, touchLayout.y, touchLayout.pageW,
+                         touchLayout.h, false, PRIMARY);
+        drawSelectIcon(renderer, touchLayout.selectAllX, touchLayout.y, touchLayout.selectAllW,
+                       touchLayout.h, PRIMARY, true);
+        drawSelectIcon(renderer, touchLayout.selectX, touchLayout.y, touchLayout.selectW,
+                       touchLayout.h, PRIMARY, false);
+    }
 
     struct Tip {
         const char* button;
@@ -331,12 +430,15 @@ static void renderFooter(Renderer& renderer, FontManager& fontManager, const I18
         totalW += fontManager.measureText(":", FONT_SIZE_FOOTER);
         totalW += fontManager.measureText(i18n.t(tips[i].key), FONT_SIZE_FOOTER);
     }
+    int contentLeft = touchLayout.enabled ? touchLayout.contentLeft : PADDING;
+    int contentRight = touchLayout.enabled ? touchLayout.contentRight : (SCREEN_W - PADDING);
+    int availableW = contentRight - contentLeft;
     int totalWithS = totalW + spacing * (n - 1);
-    while (spacing > 10 && totalWithS > SCREEN_W - 24) {
+    while (spacing > 10 && totalWithS > availableW) {
         spacing -= 2;
         totalWithS = totalW + spacing * (n - 1);
     }
-    int x = (SCREEN_W - totalWithS) / 2;
+    int x = contentLeft + std::max(0, (availableW - totalWithS) / 2);
     int footerTextH = fontManager.fontHeight(FONT_SIZE_FOOTER);
     int y = footerY + (FOOTER_H - footerTextH) / 2 - 1;
     for (int i = 0; i < n; i++) {
@@ -911,7 +1013,7 @@ int Application::run(int argc, char* argv[]) {
         renderScene();
         int scrimH = theme::HEADER_H + theme::PANEL_CONTENT_H;
         renderer.drawRectFilled(0, 0, theme::SCREEN_W, scrimH, theme::MENU_SCRIM_CONTENT);
-        renderFooter(renderer, fontManager, i18n);
+        renderFooter(renderer, fontManager, i18n, appConfig.touchButtonsEnabled);
         modalProgress.render(renderer, fontManager, i18n);
         renderer.present();
         return !interrupted;
@@ -988,6 +1090,7 @@ int Application::run(int argc, char* argv[]) {
             } else if (action == SettingsAction::Save) {
                 config::AppConfig nextConfig = appConfig;
                 nextConfig.language = settingsScreen.selectedLanguage();
+                nextConfig.touchButtonsEnabled = settingsScreen.touchButtonsEnabled();
                 std::string err;
                 if (!config::saveConfig(configPath, nextConfig, err)) {
                     toast.show(i18n.t("error.operation_failed"), err.c_str(), ToastKind::Error, 3200);
@@ -1287,6 +1390,25 @@ int Application::run(int argc, char* argv[]) {
 
         case InputLayer::BasePanels: {
             bool consumed = false;
+            uint64_t baseKDown = kDown;
+
+            if (appConfig.touchButtonsEnabled && tap.active) {
+                FooterTouchButtonsLayout touchLayout = footerTouchButtonsLayout(true);
+                if (pointInRect(&tap, touchLayout.prevX, touchLayout.y, touchLayout.pageW,
+                                touchLayout.h)) {
+                    baseKDown |= HidNpadButton_AnyLeft;
+                } else if (pointInRect(&tap, touchLayout.nextX, touchLayout.y,
+                                       touchLayout.pageW, touchLayout.h)) {
+                    baseKDown |= HidNpadButton_AnyRight;
+                } else if (pointInRect(&tap, touchLayout.selectAllX, touchLayout.y,
+                                       touchLayout.selectAllW, touchLayout.h)) {
+                    baseKDown |= HidNpadButton_X;
+                } else if (pointInRect(&tap, touchLayout.selectX, touchLayout.y,
+                                       touchLayout.selectW, touchLayout.h)) {
+                    baseKDown |= HidNpadButton_Y;
+                }
+            }
+
             if (tap.active && tap.y >= 0 && tap.y < theme::HEADER_H) {
                 HeaderIconLayout headerIcons = headerIconLayout();
                 if (tap.x >= headerIcons.menuHitX &&
@@ -1330,28 +1452,28 @@ int Application::run(int argc, char* argv[]) {
             if (consumed)
                 break;
 
-            if (kDown & HidNpadButton_Plus) {
+            if (baseKDown & HidNpadButton_Plus) {
                 mainMenu.open();
                 break;
             }
 
             if (!anim.isAnimating()) {
-                if ((kDown & HidNpadButton_L) && activePanel != PANEL_LEFT) {
+                if ((baseKDown & HidNpadButton_L) && activePanel != PANEL_LEFT) {
                     activePanel = PANEL_LEFT;
                     anim.start(anim.currentLeftW(), static_cast<float>(theme::ACTIVE_PANEL_W));
                 }
-                if ((kDown & HidNpadButton_R) && activePanel != PANEL_RIGHT) {
+                if ((baseKDown & HidNpadButton_R) && activePanel != PANEL_RIGHT) {
                     activePanel = PANEL_RIGHT;
                     anim.start(anim.currentLeftW(), static_cast<float>(theme::INACTIVE_PANEL_W));
                 }
             }
 
-            if (kDown & HidNpadButton_AnyUp) activeList.moveCursorUp();
-            if (kDown & HidNpadButton_AnyDown) activeList.moveCursorDown();
-            if (kDown & HidNpadButton_AnyLeft) activeList.moveCursorPageUp(pageItems);
-            if (kDown & HidNpadButton_AnyRight) activeList.moveCursorPageDown(pageItems);
+            if (baseKDown & HidNpadButton_AnyUp) activeList.moveCursorUp();
+            if (baseKDown & HidNpadButton_AnyDown) activeList.moveCursorDown();
+            if (baseKDown & HidNpadButton_AnyLeft) activeList.moveCursorPageUp(pageItems);
+            if (baseKDown & HidNpadButton_AnyRight) activeList.moveCursorPageDown(pageItems);
 
-            if (kDown & HidNpadButton_A) {
+            if (baseKDown & HidNpadButton_A) {
                 auto* item = activeList.getSelectedItem();
                 if (item) {
                     if (item->action == ACTION_ENTER) {
@@ -1397,13 +1519,13 @@ int Application::run(int argc, char* argv[]) {
                 }
             }
 
-            if (kDown & HidNpadButton_B) {
+            if (baseKDown & HidNpadButton_B) {
                 if (!fs::ProviderManager::isVirtualRoot(active.path))
                     navigateToPath(activePanel, fs::parentPath(active.path));
             }
 
-            if (kDown & HidNpadButton_Y) activeList.toggleSelect();
-            if (kDown & HidNpadButton_X) activeList.toggleSelectAll();
+            if (baseKDown & HidNpadButton_Y) activeList.toggleSelect();
+            if (baseKDown & HidNpadButton_X) activeList.toggleSelectAll();
             break;
         }
         }
@@ -1427,7 +1549,7 @@ int Application::run(int argc, char* argv[]) {
                 mainMenu.close();
                 break;
             case MenuCommand::Settings:
-                settingsScreen.open(appConfig.language);
+                settingsScreen.open(appConfig.language, appConfig.touchButtonsEnabled);
                 mainMenu.close();
                 break;
             case MenuCommand::Help:
@@ -1765,7 +1887,7 @@ int Application::run(int argc, char* argv[]) {
             && !settingsScreen.isOpen()
             && !webSocketInstallerScreen.isOpen()
             && !networkDriveForm.isOpen())
-            renderFooter(renderer, fontManager, i18n);
+            renderFooter(renderer, fontManager, i18n, appConfig.touchButtonsEnabled);
 
         if (mainMenu.isOpen()) mainMenu.render(renderer, fontManager, i18n, menuSt);
         modalConfirm.render(renderer, fontManager, i18n);

@@ -31,6 +31,7 @@ struct NetworkDriveConfig {
 
 struct AppConfig {
     AppLanguage language = AppLanguage::En;
+    bool touchButtonsEnabled = false;
     std::vector<NetworkDriveConfig> networkDrives;
 };
 

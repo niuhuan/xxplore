@@ -140,6 +140,12 @@ bool loadConfigFromArgv0(const char* argv0, AppConfig& outConfig, std::string& o
         }
 
         outConfig.language = language;
+        json_object* touchButtonsObj = nullptr;
+        if (json_object_object_get_ex(root, "touchButtonsEnabled", &touchButtonsObj) &&
+            touchButtonsObj &&
+            json_object_is_type(touchButtonsObj, json_type_boolean)) {
+            outConfig.touchButtonsEnabled = json_object_get_boolean(touchButtonsObj);
+        }
         ok = true;
     } while (false);
 
@@ -193,6 +199,8 @@ bool saveConfig(const std::string& path, const AppConfig& config, std::string& e
     }
 
     json_object_object_add(root, "language", json_object_new_string(languageId(config.language)));
+    json_object_object_add(root, "touchButtonsEnabled",
+                           json_object_new_boolean(config.touchButtonsEnabled));
 
     // Serialize network drives
     json_object* drivesArr = json_object_new_array();
