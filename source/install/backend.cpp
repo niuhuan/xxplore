@@ -5,12 +5,16 @@
 #include <array>
 #include <cctype>
 #include <cstdarg>
+#include <condition_variable>
 #include <cstdio>
 #include <cstring>
+#include <deque>
 #include <filesystem>
 #include <memory>
+#include <mutex>
 #include <stdexcept>
 #include <string>
+#include <thread>
 #include <vector>
 #include <zstd.h>
 
@@ -1270,6 +1274,193 @@ void finishContainerEntry(uint64_t entrySize) {
     emitProgress(gStreamProgress, 0, 1);
 }
 
+constexpr size_t kInstallReadChunkSize = 0x100000;
+
+size_t installReadAheadBlocks() {
+    return appletGetAppletType() == AppletType_LibraryApplet ? 4U : 8U;
+}
+
+class BufferedInstallReader {
+public:
+    using ReadFn = std::function<bool(uint64_t offset, size_t size, void* outBuffer,
+                                      std::string& errOut)>;
+
+    BufferedInstallReader(std::string debugPath, ReadFn readFn)
+        : debugPath_(std::move(debugPath)), readFn_(std::move(readFn)) {
+        chunkSize_ = kInstallReadChunkSize;
+        maxBlocks_ = installReadAheadBlocks();
+        if (maxBlocks_ == 0)
+            maxBlocks_ = 1;
+    }
+
+    ~BufferedInstallReader() { stop(); }
+
+    size_t chunkSize() const { return chunkSize_; }
+
+    bool start(uint64_t startOffset, uint64_t totalBytes, std::string& errOut) {
+        if (!readFn_) {
+            errOut = "Install data source unavailable";
+            return false;
+        }
+
+        stop();
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            startOffset_ = startOffset;
+            totalBytes_ = totalBytes;
+            nextReadOffset_ = startOffset;
+            bytesScheduled_ = 0;
+            bytesConsumed_ = 0;
+            stopRequested_ = false;
+            producerDone_ = false;
+            producerError_.clear();
+            queue_.clear();
+        }
+
+        debugPrint("pipeline", "start path=%s chunk=%zu buffers=%zu total=%llu",
+                   debugPath_.c_str(), chunkSize_, maxBlocks_,
+                   static_cast<unsigned long long>(totalBytes));
+        if (maxBlocks_ <= 1)
+            return true;
+        worker_ = std::thread([this]() { workerLoop(); });
+        return true;
+    }
+
+    bool readNext(void* outBuffer, size_t size, std::string& errOut) {
+        if (!readFn_) {
+            errOut = "Install data source unavailable";
+            return false;
+        }
+
+        if (maxBlocks_ <= 1) {
+            bool ok = readFn_(startOffset_ + bytesConsumed_, size, outBuffer, errOut);
+            if (ok)
+                bytesConsumed_ += size;
+            return ok;
+        }
+
+        Chunk chunk;
+        {
+            std::unique_lock<std::mutex> lock(mutex_);
+            cvNotEmpty_.wait(lock, [this]() {
+                return stopRequested_ || !queue_.empty() || producerDone_ || !producerError_.empty();
+            });
+
+            if (!producerError_.empty()) {
+                errOut = producerError_;
+                return false;
+            }
+            if (queue_.empty()) {
+                errOut = "Remote prefetch ended unexpectedly";
+                return false;
+            }
+
+            chunk = std::move(queue_.front());
+            queue_.pop_front();
+            bytesConsumed_ += chunk.data.size();
+            cvNotFull_.notify_one();
+        }
+
+        if (!chunk.error.empty()) {
+            errOut = chunk.error;
+            return false;
+        }
+        if (chunk.data.size() != size) {
+            char buf[128];
+            std::snprintf(buf, sizeof(buf), "Remote chunk size mismatch: expected %zu got %zu",
+                          size, chunk.data.size());
+            errOut = buf;
+            return false;
+        }
+
+        std::memcpy(outBuffer, chunk.data.data(), size);
+        return true;
+    }
+
+    void stop() {
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            stopRequested_ = true;
+            cvNotEmpty_.notify_all();
+            cvNotFull_.notify_all();
+        }
+        if (worker_.joinable())
+            worker_.join();
+    }
+
+private:
+    struct Chunk {
+        std::vector<u8> data;
+        std::string error;
+    };
+
+    void workerLoop() {
+        for (;;) {
+            uint64_t offset = 0;
+            size_t size = 0;
+            {
+                std::unique_lock<std::mutex> lock(mutex_);
+                cvNotFull_.wait(lock, [this]() {
+                    return stopRequested_ || queue_.size() < maxBlocks_;
+                });
+
+                if (stopRequested_)
+                    break;
+                if (bytesScheduled_ >= totalBytes_) {
+                    producerDone_ = true;
+                    cvNotEmpty_.notify_all();
+                    break;
+                }
+
+                offset = nextReadOffset_;
+                uint64_t remaining = totalBytes_ - bytesScheduled_;
+                size = static_cast<size_t>(std::min<uint64_t>(chunkSize_, remaining));
+                nextReadOffset_ += size;
+                bytesScheduled_ += size;
+            }
+
+            Chunk chunk;
+            chunk.data.resize(size);
+            std::string err;
+            if (!readFn_(offset, size, chunk.data.data(), err)) {
+                chunk.error = err.empty() ? "Install read failed" : err;
+            }
+
+            {
+                std::lock_guard<std::mutex> lock(mutex_);
+                if (!chunk.error.empty()) {
+                    producerError_ = chunk.error;
+                    producerDone_ = true;
+                    cvNotEmpty_.notify_all();
+                    break;
+                }
+                queue_.push_back(std::move(chunk));
+                cvNotEmpty_.notify_one();
+            }
+        }
+    }
+
+    std::string debugPath_;
+    ReadFn readFn_;
+    size_t chunkSize_ = 0x100000;
+    size_t maxBlocks_ = 1;
+
+    uint64_t startOffset_ = 0;
+    uint64_t totalBytes_ = 0;
+    uint64_t nextReadOffset_ = 0;
+    uint64_t bytesScheduled_ = 0;
+    uint64_t bytesConsumed_ = 0;
+
+    bool stopRequested_ = false;
+    bool producerDone_ = false;
+    std::string producerError_;
+    std::deque<Chunk> queue_;
+    std::mutex mutex_;
+    std::condition_variable cvNotEmpty_;
+    std::condition_variable cvNotFull_;
+    std::thread worker_;
+};
+
 class InstallTask {
 public:
     InstallTask(NcmStorageId storageId, bool ignoreReqFirmVersion)
@@ -1364,19 +1555,35 @@ public:
         NcaWriter writer(ncaId, placeholderId, contentStorage);
         u64 fileStart = GetDataOffset() + fileEntry->dataOffset;
         u64 fileOff = 0;
-        size_t readSize = 0x400000;
+        BufferedInstallReader reader(filePath, [this](uint64_t offset, size_t size,
+                                                      void* outBuffer, std::string& errOut) {
+            ::fseeko(file, static_cast<off_t>(offset), SEEK_SET);
+            size_t n = std::fread(outBuffer, 1, size, file);
+            if (n != size) {
+                errOut = "Local read failed";
+                return false;
+            }
+            return true;
+        });
+        size_t readSize = reader.chunkSize();
         auto buffer = std::make_unique<u8[]>(readSize);
+        std::string readerErr;
+        if (!reader.start(fileStart, ncaSize, readerErr))
+            XP_THROW(readerErr);
 
         beginContainerEntry(ncaFileName, ncaSize);
         while (fileOff < ncaSize) {
             size_t chunk = readSize;
             if (fileOff + chunk >= ncaSize)
                 chunk = static_cast<size_t>(ncaSize - fileOff);
-            BufferData(buffer.get(), fileStart + fileOff, chunk);
+            std::string err;
+            if (!reader.readNext(buffer.get(), chunk, err))
+                XP_THROW(err.empty() ? "Install read failed" : err);
             writer.write(buffer.get(), chunk);
             fileOff += chunk;
             updateContainerEntry(fileOff, ncaSize);
         }
+        reader.stop();
         writer.close();
         finishContainerEntry(ncaSize);
     }
@@ -1428,19 +1635,35 @@ public:
         NcaWriter writer(ncaId, placeholderId, contentStorage);
         u64 fileStart = GetDataOffset() + fileEntry->dataOffset;
         u64 fileOff = 0;
-        size_t readSize = 0x400000;
+        BufferedInstallReader reader(filePath, [this](uint64_t offset, size_t size,
+                                                      void* outBuffer, std::string& errOut) {
+            ::fseeko(file, static_cast<off_t>(offset), SEEK_SET);
+            size_t n = std::fread(outBuffer, 1, size, file);
+            if (n != size) {
+                errOut = "Local read failed";
+                return false;
+            }
+            return true;
+        });
+        size_t readSize = reader.chunkSize();
         auto buffer = std::make_unique<u8[]>(readSize);
+        std::string readerErr;
+        if (!reader.start(fileStart, ncaSize, readerErr))
+            XP_THROW(readerErr);
 
         beginContainerEntry(ncaFileName, ncaSize);
         while (fileOff < ncaSize) {
             size_t chunk = readSize;
             if (fileOff + chunk >= ncaSize)
                 chunk = static_cast<size_t>(ncaSize - fileOff);
-            BufferData(buffer.get(), fileStart + fileOff, chunk);
+            std::string err;
+            if (!reader.readNext(buffer.get(), chunk, err))
+                XP_THROW(err.empty() ? "Install read failed" : err);
             writer.write(buffer.get(), chunk);
             fileOff += chunk;
             updateContainerEntry(fileOff, ncaSize);
         }
+        reader.stop();
         writer.close();
         finishContainerEntry(ncaSize);
     }
@@ -1484,19 +1707,35 @@ public:
         NcaWriter writer(ncaId, placeholderId, contentStorage);
         u64 fileStart = GetDataOffset() + fileEntry->dataOffset;
         u64 fileOff = 0;
-        size_t readSize = 0x100000;
+        BufferedInstallReader reader(item_.path,
+                                     [this](uint64_t offset, size_t size, void* outBuffer,
+                                            std::string& errOut) {
+                                         if (!sourceCallbacks_ || !sourceCallbacks_->readRange) {
+                                             errOut = "Remote install data source unavailable";
+                                             return false;
+                                         }
+                                         return sourceCallbacks_->readRange(item_, offset, size,
+                                                                            outBuffer, errOut);
+                                     });
+        size_t readSize = reader.chunkSize();
         auto buffer = std::make_unique<u8[]>(readSize);
+        std::string readerErr;
+        if (!reader.start(fileStart, ncaSize, readerErr))
+            XP_THROW(readerErr);
 
         beginContainerEntry(ncaFileName, ncaSize);
         while (fileOff < ncaSize) {
             size_t chunk = readSize;
             if (fileOff + chunk >= ncaSize)
                 chunk = static_cast<size_t>(ncaSize - fileOff);
-            BufferData(buffer.get(), fileStart + fileOff, chunk);
+            std::string err;
+            if (!reader.readNext(buffer.get(), chunk, err))
+                XP_THROW(err.empty() ? "Remote read failed" : err);
             writer.write(buffer.get(), chunk);
             fileOff += chunk;
             updateContainerEntry(fileOff, ncaSize);
         }
+        reader.stop();
         writer.close();
         finishContainerEntry(ncaSize);
     }
@@ -1533,19 +1772,35 @@ public:
         NcaWriter writer(ncaId, placeholderId, contentStorage);
         u64 fileStart = GetDataOffset() + fileEntry->dataOffset;
         u64 fileOff = 0;
-        size_t readSize = 0x100000;
+        BufferedInstallReader reader(item_.path,
+                                     [this](uint64_t offset, size_t size, void* outBuffer,
+                                            std::string& errOut) {
+                                         if (!sourceCallbacks_ || !sourceCallbacks_->readRange) {
+                                             errOut = "Remote install data source unavailable";
+                                             return false;
+                                         }
+                                         return sourceCallbacks_->readRange(item_, offset, size,
+                                                                            outBuffer, errOut);
+                                     });
+        size_t readSize = reader.chunkSize();
         auto buffer = std::make_unique<u8[]>(readSize);
+        std::string readerErr;
+        if (!reader.start(fileStart, ncaSize, readerErr))
+            XP_THROW(readerErr);
 
         beginContainerEntry(ncaFileName, ncaSize);
         while (fileOff < ncaSize) {
             size_t chunk = readSize;
             if (fileOff + chunk >= ncaSize)
                 chunk = static_cast<size_t>(ncaSize - fileOff);
-            BufferData(buffer.get(), fileStart + fileOff, chunk);
+            std::string err;
+            if (!reader.readNext(buffer.get(), chunk, err))
+                XP_THROW(err.empty() ? "Remote read failed" : err);
             writer.write(buffer.get(), chunk);
             fileOff += chunk;
             updateContainerEntry(fileOff, ncaSize);
         }
+        reader.stop();
         writer.close();
         finishContainerEntry(ncaSize);
     }

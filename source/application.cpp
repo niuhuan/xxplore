@@ -1426,6 +1426,8 @@ int Application::run(int argc, char* argv[]) {
     leftPanel.list.destroyCache();
     rightPanel.list.destroyCache();
     webSocketInstallerScreen.close();
+    // Destroy network providers before socket services are torn down.
+    provMgr = fs::ProviderManager();
     for (auto& e : icons)
         if (e.tex) SDL_DestroyTexture(e.tex);
     fontManager.shutdown();
