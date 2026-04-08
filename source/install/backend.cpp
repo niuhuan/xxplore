@@ -1611,18 +1611,21 @@ protected:
                        storage->HasPlaceholder(placeholderId) ? 1 : 0);
             storage->Register(placeholderId, ncaId);
         } catch (...) {
+            bool contentPresent = false;
             debugPrint("install", "register failed content=%s placeholder_exists=%d",
                        util::GetNcaIdString(ncaId).c_str(),
                        storage->HasPlaceholder(placeholderId) ? 1 : 0);
             try {
-                if (gStreamProgress.callbacks && storage->Has(ncaId))
+                contentPresent = storage->Has(ncaId);
+                if (gStreamProgress.callbacks && contentPresent)
                     emitLog(*gStreamProgress.callbacks, "Content already present: " + util::GetNcaIdString(ncaId));
             } catch (...) {}
             try {
                 if (storage->HasPlaceholder(placeholderId))
                     storage->DeletePlaceholder(placeholderId);
             } catch (...) {}
-            throw;
+            if (!contentPresent)
+                throw;
         }
         try { storage->DeletePlaceholder(placeholderId); } catch (...) {}
     }
@@ -1700,18 +1703,21 @@ protected:
                        storage->HasPlaceholder(placeholderId) ? 1 : 0);
             storage->Register(placeholderId, ncaId);
         } catch (...) {
+            bool contentPresent = false;
             debugPrint("install", "register failed content=%s placeholder_exists=%d",
                        util::GetNcaIdString(ncaId).c_str(),
                        storage->HasPlaceholder(placeholderId) ? 1 : 0);
             try {
-                if (gStreamProgress.callbacks && storage->Has(ncaId))
+                contentPresent = storage->Has(ncaId);
+                if (gStreamProgress.callbacks && contentPresent)
                     emitLog(*gStreamProgress.callbacks, "Content already present: " + util::GetNcaIdString(ncaId));
             } catch (...) {}
             try {
                 if (storage->HasPlaceholder(placeholderId))
                     storage->DeletePlaceholder(placeholderId);
             } catch (...) {}
-            throw;
+            if (!contentPresent)
+                throw;
         }
         try { storage->DeletePlaceholder(placeholderId); } catch (...) {}
     }
