@@ -24,14 +24,34 @@ uv pip install fonttools brotli
 uv run python scripts/subset_font.py
 
 # 4. Build
-make
+make DEFINES=-DXPLORE_DEBUG
+
+# 5. Or build a distributable folder
+make DEFINES=-DXPLORE_DEBUG dist
 ```
 
 The generated `xplore.nro` can then be launched from hbmenu.
 
+`make dist` creates `dist/switch/` and copies `xplore.nro` there, plus `scripts/cjk.ttf` renamed to `xplore.ttf` for external font loading.
+
+## External Font
+
+Xplore checks for an external `.ttf` next to the running `.nro`.
+
+Example:
+
+```text
+sdmc:/switch/xplore/xplore.nro
+sdmc:/switch/xplore/xplore.ttf
+```
+
+If `xplore.ttf` exists, Xplore uses that font for all UI text. There is no fallback mixing with the built-in font. If it does not exist, Xplore uses `romfs:/fonts/xplore.ttf`.
+
+This is useful when the built-in subset font is missing characters you need.
+
 ### Optional: SMB2 Support
 
-SMB2 network drive support requires [libsmb2](https://github.com/sahlberg/libsmb2). The Makefile auto-detects whether it is installed and enables it automatically.
+SMB2 network drive support requires [libsmb2](https://github.com/sahlberg/libsmb2). Xplore links against it directly.
 
 ```bash
 # Clone libsmb2
@@ -42,4 +62,4 @@ cd libsmb2
 sudo make -f Makefile.platform switch_install
 ```
 
-After installation, rebuild Xplore and SMB2 will be enabled automatically.
+After installation, rebuild Xplore.

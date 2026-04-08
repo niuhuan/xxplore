@@ -99,6 +99,34 @@ constexpr uint64_t kAppletImageFileLimit   = 1ULL * 1024ULL * 1024ULL;
 constexpr uint64_t kNormalImageFileLimit   = 10ULL * 1024ULL * 1024ULL;
 constexpr uint64_t kAppletImageDecodeLimit = 8ULL * 1024ULL * 1024ULL;
 constexpr uint64_t kNormalImageDecodeLimit = 96ULL * 1024ULL * 1024ULL;
+constexpr std::size_t kAppletFontGlyphCacheLimit = 2U * 1024U * 1024U;
+constexpr std::size_t kNormalFontGlyphCacheLimit = 4U * 1024U * 1024U;
+
+static std::string deriveSiblingFontPath(const char* argv0) {
+    if (!argv0 || !argv0[0])
+        return {};
+
+    std::string path(argv0);
+    std::size_t slash = path.find_last_of("/\\");
+    std::size_t dot = path.rfind('.');
+    if (dot == std::string::npos || (slash != std::string::npos && dot < slash))
+        return {};
+
+    path.replace(dot, std::string::npos, ".ttf");
+    return path;
+}
+
+static bool fileExists(const std::string& path) {
+    if (path.empty())
+        return false;
+
+    FILE* file = std::fopen(path.c_str(), "rb");
+    if (!file)
+        return false;
+
+    std::fclose(file);
+    return true;
+}
 
 static std::vector<IconEntry> loadIcons(Renderer& renderer) {
     const char* names[] = {
@@ -260,7 +288,6 @@ enum class PendingConfirm { None, DeleteItems, PasteChoice, DeleteDrive };
 
 int Application::run(int argc, char* argv[]) {
     (void)argc;
-    (void)argv;
 #ifdef XPLORE_DEBUG
     socketInitializeDefault();
     nxlinkStdio();
@@ -271,17 +298,28 @@ int Application::run(int argc, char* argv[]) {
     PadState pad;
     padInitializeDefault(&pad);
     const bool appletMode = appletGetAppletType() == AppletType_LibraryApplet;
+    const std::size_t fontGlyphCacheLimit =
+        appletMode ? kAppletFontGlyphCacheLimit : kNormalFontGlyphCacheLimit;
+    const char* argv0 = (argv && argc > 0) ? argv[0] : nullptr;
+    const std::string externalFontPath = deriveSiblingFontPath(argv0);
+    const std::string selectedFontPath =
+        fileExists(externalFontPath) ? externalFontPath : "romfs:/fonts/xplore.ttf";
+
+#ifdef XPLORE_DEBUG
+    std::printf("Font: path=%s cache_limit=%zuKB\n",
+                selectedFontPath.c_str(), fontGlyphCacheLimit / 1024U);
+#endif
 
     Renderer renderer;
     FontManager fontManager;
-    if (!renderer.init() || !fontManager.init("romfs:/fonts/xplore.ttf")) {
+    if (!renderer.init() || !fontManager.init(selectedFontPath.c_str(), fontGlyphCacheLimit)) {
         romfsExit();
         return 1;
     }
 
     config::AppConfig appConfig = config::defaultConfig();
     std::string configPath;
-    config::loadConfigFromArgv0(argc > 0 ? argv[0] : nullptr, appConfig, configPath);
+    config::loadConfigFromArgv0(argv0, appConfig, configPath);
 
     I18n i18n;
     if (!i18n.load(config::languageRomfsPath(appConfig.language))) {

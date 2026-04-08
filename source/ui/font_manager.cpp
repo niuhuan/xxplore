@@ -49,43 +49,52 @@ bool decodeUtf8Codepoint(const char*& p, Uint32& codepoint) {
     return true;
 }
 
-void appendUtf8Codepoint(std::string& out, Uint32 codepoint) {
-    if (codepoint < 0x80) {
-        out.push_back(static_cast<char>(codepoint));
+void popLastUtf8Codepoint(std::string& text) {
+    if (text.empty())
         return;
-    }
-    if (codepoint < 0x800) {
-        out.push_back(static_cast<char>(0xC0 | ((codepoint >> 6) & 0x1F)));
-        out.push_back(static_cast<char>(0x80 | (codepoint & 0x3F)));
-        return;
-    }
-    if (codepoint < 0x10000) {
-        out.push_back(static_cast<char>(0xE0 | ((codepoint >> 12) & 0x0F)));
-        out.push_back(static_cast<char>(0x80 | ((codepoint >> 6) & 0x3F)));
-        out.push_back(static_cast<char>(0x80 | (codepoint & 0x3F)));
-        return;
-    }
 
-    out.push_back(static_cast<char>(0xF0 | ((codepoint >> 18) & 0x07)));
-    out.push_back(static_cast<char>(0x80 | ((codepoint >> 12) & 0x3F)));
-    out.push_back(static_cast<char>(0x80 | ((codepoint >> 6) & 0x3F)));
-    out.push_back(static_cast<char>(0x80 | (codepoint & 0x3F)));
+    std::size_t pos = text.size() - 1;
+    while (pos > 0 && (static_cast<unsigned char>(text[pos]) & 0xC0) == 0x80)
+        --pos;
+    text.erase(pos);
+}
+
+Uint32 resolveGlyphCodepoint(TTF_Font* font, Uint32 codepoint) {
+    if (codepoint == '\t')
+        codepoint = ' ';
+
+    if (TTF_GlyphIsProvided32(font, codepoint))
+        return codepoint;
+
+    if (TTF_GlyphIsProvided32(font, static_cast<Uint32>(kMissingGlyphPlaceholder)))
+        return static_cast<Uint32>(kMissingGlyphPlaceholder);
+
+    if (TTF_GlyphIsProvided32(font, static_cast<Uint32>(' ')))
+        return static_cast<Uint32>(' ');
+
+    return 0;
 }
 
 } // namespace
 
-bool FontManager::init(const char* path) {
+bool FontManager::init(const char* path, std::size_t cacheLimitBytes) {
     if (TTF_Init() < 0) {
         printf("TTF_Init failed: %s\n", TTF_GetError());
         return false;
     }
     ttfInited = true;
     fontPath = path;
+    glyphCacheLimitBytes = cacheLimitBytes;
+    glyphCacheBytes = 0;
+    glyphCache.clear();
+    glyphLru.clear();
 
     // Verify the font file is loadable at a test size
     TTF_Font* test = TTF_OpenFont(fontPath.c_str(), 16);
     if (!test) {
         printf("Cannot open font %s: %s\n", fontPath.c_str(), TTF_GetError());
+        TTF_Quit();
+        ttfInited = false;
         return false;
     }
     fontCache[16] = test;
@@ -93,6 +102,14 @@ bool FontManager::init(const char* path) {
 }
 
 void FontManager::shutdown() {
+    for (auto& [key, glyph] : glyphCache) {
+        if (glyph.texture)
+            SDL_DestroyTexture(glyph.texture);
+    }
+    glyphCache.clear();
+    glyphLru.clear();
+    glyphCacheBytes = 0;
+
     for (auto& [size, font] : fontCache)
         TTF_CloseFont(font);
     fontCache.clear();
@@ -115,65 +132,199 @@ TTF_Font* FontManager::getFont(int size) {
     return font;
 }
 
-std::string FontManager::sanitizeText(TTF_Font* font, const char* text) {
-    if (!font || !text || !text[0])
-        return {};
+uint64_t FontManager::glyphKey(int size, Uint32 codepoint) const {
+    return (static_cast<uint64_t>(static_cast<uint32_t>(size)) << 32) |
+           static_cast<uint64_t>(codepoint);
+}
 
-    std::string sanitized;
-    sanitized.reserve(std::strlen(text));
-    const char* p = text;
-    while (*p) {
-        const char* original = p;
-        Uint32 codepoint = 0;
-        if (!decodeUtf8Codepoint(p, codepoint)) {
-            sanitized.push_back(kMissingGlyphPlaceholder);
-            break;
-        }
+void FontManager::touchGlyph(uint64_t key, GlyphEntry& glyph) {
+    glyphLru.erase(glyph.lruIt);
+    glyphLru.push_front(key);
+    glyph.lruIt = glyphLru.begin();
+}
 
-        if (codepoint == '\r' || codepoint == '\n' || codepoint == '\t' ||
-            TTF_GlyphIsProvided32(font, codepoint)) {
-            appendUtf8Codepoint(sanitized, codepoint);
-        } else {
-            sanitized.push_back(kMissingGlyphPlaceholder);
-        }
+void FontManager::evictGlyphs() {
+    while (glyphCacheLimitBytes > 0 && glyphCacheBytes > glyphCacheLimitBytes &&
+           !glyphLru.empty()) {
+        uint64_t key = glyphLru.back();
+        glyphLru.pop_back();
 
-        if (p == original)
-            ++p;
+        auto it = glyphCache.find(key);
+        if (it == glyphCache.end())
+            continue;
+
+        if (it->second.texture)
+            SDL_DestroyTexture(it->second.texture);
+        if (glyphCacheBytes >= it->second.bytes)
+            glyphCacheBytes -= it->second.bytes;
+        else
+            glyphCacheBytes = 0;
+        glyphCache.erase(it);
     }
-    return sanitized;
+}
+
+FontManager::GlyphEntry* FontManager::getGlyph(SDL_Renderer* renderer, TTF_Font* font,
+                                               int fontSize, Uint32 codepoint) {
+    if (!renderer || !font)
+        return nullptr;
+
+    Uint32 resolvedCodepoint = resolveGlyphCodepoint(font, codepoint);
+    if (resolvedCodepoint == 0)
+        return nullptr;
+
+    uint64_t key = glyphKey(fontSize, resolvedCodepoint);
+    auto cached = glyphCache.find(key);
+    if (cached != glyphCache.end()) {
+        touchGlyph(key, cached->second);
+        return &cached->second;
+    }
+
+    GlyphEntry glyph;
+    int maxx = 0;
+    int miny = 0;
+    if (TTF_GlyphMetrics32(font, resolvedCodepoint, &glyph.minx, &maxx, &miny,
+                           &glyph.maxy, &glyph.advance) < 0) {
+        return nullptr;
+    }
+
+    SDL_Color white = {255, 255, 255, 255};
+    SDL_Surface* surface = TTF_RenderGlyph32_Blended(font, resolvedCodepoint, white);
+    if (surface) {
+        glyph.width = surface->w;
+        glyph.height = surface->h;
+        glyph.bytes = static_cast<std::size_t>(surface->w) *
+                      static_cast<std::size_t>(surface->h) * 4U;
+        if (surface->w > 0 && surface->h > 0) {
+            glyph.texture = SDL_CreateTextureFromSurface(renderer, surface);
+            if (glyph.texture)
+                SDL_SetTextureBlendMode(glyph.texture, SDL_BLENDMODE_BLEND);
+        }
+        SDL_FreeSurface(surface);
+    }
+
+    glyphLru.push_front(key);
+    glyph.lruIt = glyphLru.begin();
+    auto inserted = glyphCache.emplace(key, std::move(glyph));
+    glyphCacheBytes += inserted.first->second.bytes;
+    evictGlyphs();
+
+    auto it = glyphCache.find(key);
+    return it != glyphCache.end() ? &it->second : nullptr;
 }
 
 void FontManager::drawText(SDL_Renderer* renderer, const char* text,
                            int x, int y, int fontSize, SDL_Color color) {
-    if (!text || !text[0]) return;
+    if (!renderer || !text || !text[0])
+        return;
 
     TTF_Font* font = getFont(fontSize);
-    if (!font) return;
+    if (!font)
+        return;
 
-    std::string sanitized = sanitizeText(font, text);
-    if (sanitized.empty()) return;
+    int penX = x;
+    Uint32 previousCodepoint = 0;
+    bool hasPrevious = false;
+    const char* p = text;
+    while (*p) {
+        Uint32 codepoint = 0;
+        if (!decodeUtf8Codepoint(p, codepoint))
+            break;
 
-    SDL_Surface* surface = TTF_RenderUTF8_Blended(font, sanitized.c_str(), color);
-    if (!surface) return;
+        if (codepoint == '\r' || codepoint == '\n')
+            break;
 
-    SDL_Texture* texture = SDL_CreateTextureFromSurface(renderer, surface);
-    if (texture) {
-        SDL_Rect dst = {x, y, surface->w, surface->h};
-        SDL_RenderCopy(renderer, texture, nullptr, &dst);
-        SDL_DestroyTexture(texture);
+        if (codepoint == '\t')
+            codepoint = ' ';
+
+        Uint32 resolvedCodepoint = resolveGlyphCodepoint(font, codepoint);
+        if (resolvedCodepoint == 0)
+            continue;
+
+        if (hasPrevious && TTF_GetFontKerning(font)) {
+            int kerning = TTF_GetFontKerningSizeGlyphs32(font, previousCodepoint,
+                                                         resolvedCodepoint);
+            if (kerning != 0)
+                penX += kerning;
+        }
+
+        GlyphEntry* glyph = getGlyph(renderer, font, fontSize, codepoint);
+        if (!glyph)
+            continue;
+
+        if (glyph->texture && glyph->width > 0 && glyph->height > 0) {
+            SDL_SetTextureColorMod(glyph->texture, color.r, color.g, color.b);
+            SDL_SetTextureAlphaMod(glyph->texture, color.a);
+
+            SDL_Rect dst = {
+                penX,
+                y,
+                glyph->width,
+                glyph->height
+            };
+            SDL_RenderCopy(renderer, glyph->texture, nullptr, &dst);
+        }
+
+        penX += glyph->advance;
+        previousCodepoint = resolvedCodepoint;
+        hasPrevious = true;
     }
-    SDL_FreeSurface(surface);
 }
 
 int FontManager::measureText(const char* text, int fontSize) {
-    if (!text || !text[0]) return 0;
+    if (!text || !text[0])
+        return 0;
+
     TTF_Font* font = getFont(fontSize);
-    if (!font) return 0;
-    std::string sanitized = sanitizeText(font, text);
-    if (sanitized.empty()) return 0;
-    int w = 0, h = 0;
-    TTF_SizeUTF8(font, sanitized.c_str(), &w, &h);
-    return w;
+    if (!font)
+        return 0;
+
+    int width = 0;
+    Uint32 previousCodepoint = 0;
+    bool hasPrevious = false;
+    const char* p = text;
+    while (*p) {
+        Uint32 codepoint = 0;
+        if (!decodeUtf8Codepoint(p, codepoint))
+            break;
+
+        if (codepoint == '\r' || codepoint == '\n')
+            break;
+
+        if (codepoint == '\t')
+            codepoint = ' ';
+
+        Uint32 resolvedCodepoint = resolveGlyphCodepoint(font, codepoint);
+        if (resolvedCodepoint == 0)
+            continue;
+
+        if (hasPrevious && TTF_GetFontKerning(font)) {
+            int kerning = TTF_GetFontKerningSizeGlyphs32(font, previousCodepoint,
+                                                         resolvedCodepoint);
+            if (kerning != 0)
+                width += kerning;
+        }
+
+        auto cached = glyphCache.find(glyphKey(fontSize, resolvedCodepoint));
+        if (cached != glyphCache.end()) {
+            width += cached->second.advance;
+            previousCodepoint = resolvedCodepoint;
+            hasPrevious = true;
+            continue;
+        }
+
+        int minx = 0;
+        int maxx = 0;
+        int miny = 0;
+        int maxy = 0;
+        int advance = 0;
+        if (TTF_GlyphMetrics32(font, resolvedCodepoint, &minx, &maxx, &miny, &maxy,
+                               &advance) == 0) {
+            width += advance;
+            previousCodepoint = resolvedCodepoint;
+            hasPrevious = true;
+        }
+    }
+    return width;
 }
 
 int FontManager::fontHeight(int fontSize) {
@@ -185,11 +336,14 @@ int FontManager::fontHeight(int fontSize) {
 void FontManager::drawTextEllipsis(SDL_Renderer* renderer, const char* text,
                                    int x, int y, int fontSize, SDL_Color color,
                                    int maxWidth) {
-    if (!text || !text[0] || maxWidth <= 0) return;
+    if (!text || !text[0] || maxWidth <= 0)
+        return;
+
     if (measureText(text, fontSize) <= maxWidth) {
         drawText(renderer, text, x, y, fontSize, color);
         return;
     }
+
     const char ell[] = "...";
     int ellW = measureText(ell, fontSize);
     if (ellW >= maxWidth) {
@@ -198,8 +352,9 @@ void FontManager::drawTextEllipsis(SDL_Renderer* renderer, const char* text,
     }
     std::string s(text);
     while (!s.empty()) {
-        s.pop_back();
-        if (s.empty()) break;
+        popLastUtf8Codepoint(s);
+        if (s.empty())
+            break;
         if (measureText(s.c_str(), fontSize) + ellW <= maxWidth) {
             s += ell;
             drawText(renderer, s.c_str(), x, y, fontSize, color);

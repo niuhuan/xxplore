@@ -12,6 +12,7 @@ include $(DEVKITPRO)/libnx/switch_rules
 #---------------------------------------------------------------------------------
 TARGET		:=	$(notdir $(CURDIR))
 BUILD		:=	build
+DIST		:=	dist
 SOURCES		:=	source source/ui source/fs source/i18n source/install source/util
 DATA		:=	data
 INCLUDES	:=	include include/ui include/fs include/i18n include/install include/util
@@ -141,7 +142,7 @@ ifneq ($(ROMFS),)
 	export NROFLAGS += --romfsdir=$(CURDIR)/$(ROMFS)
 endif
 
-.PHONY: $(BUILD) clean all
+.PHONY: $(BUILD) clean all dist
 
 #---------------------------------------------------------------------------------
 all: $(BUILD)
@@ -150,13 +151,20 @@ $(BUILD):
 	@[ -d $@ ] || mkdir -p $@
 	@$(MAKE) --no-print-directory -C $(BUILD) -f $(CURDIR)/Makefile
 
+dist: all
+	@echo dist ...
+	@rm -fr $(DIST)
+	@mkdir -p $(DIST)/switch
+	@cp $(TARGET).nro $(DIST)/switch/$(TARGET).nro
+	@cp scripts/cjk.ttf $(DIST)/switch/$(TARGET).ttf
+
 #---------------------------------------------------------------------------------
 clean:
 	@echo clean ...
 ifeq ($(strip $(APP_JSON)),)
-	@rm -fr $(BUILD) $(TARGET).nro $(TARGET).nacp $(TARGET).elf
+	@rm -fr $(BUILD) $(DIST) $(TARGET).nro $(TARGET).nacp $(TARGET).elf
 else
-	@rm -fr $(BUILD) $(TARGET).nsp $(TARGET).nso $(TARGET).npdm $(TARGET).elf
+	@rm -fr $(BUILD) $(DIST) $(TARGET).nsp $(TARGET).nso $(TARGET).npdm $(TARGET).elf
 endif
 
 

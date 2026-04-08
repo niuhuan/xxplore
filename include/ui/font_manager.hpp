@@ -1,6 +1,9 @@
 #pragma once
 #include <SDL.h>
 #include <SDL_ttf.h>
+#include <cstddef>
+#include <cstdint>
+#include <list>
 #include <string>
 #include <unordered_map>
 
@@ -12,7 +15,7 @@ class FontManager {
 public:
     /// Initialize SDL_ttf. Call after Renderer::init() and romfsInit().
     /// @param fontPath  path to the .ttf file (e.g. "romfs:/fonts/xplore.ttf")
-    bool init(const char* fontPath);
+    bool init(const char* fontPath, std::size_t glyphCacheLimitBytes);
     /// Close all cached fonts and shut down SDL_ttf.
     void shutdown();
 
@@ -29,12 +32,30 @@ public:
                           int x, int y, int fontSize, SDL_Color color, int maxWidth);
 
 private:
+    struct GlyphEntry {
+        SDL_Texture* texture = nullptr;
+        int width = 0;
+        int height = 0;
+        int minx = 0;
+        int maxy = 0;
+        int advance = 0;
+        std::size_t bytes = 0;
+        std::list<uint64_t>::iterator lruIt;
+    };
+
     /// Open (or return cached) TTF_Font for the requested point size.
     TTF_Font* getFont(int size);
-    std::string sanitizeText(TTF_Font* font, const char* text);
+    uint64_t glyphKey(int size, Uint32 codepoint) const;
+    GlyphEntry* getGlyph(SDL_Renderer* renderer, TTF_Font* font, int fontSize, Uint32 codepoint);
+    void touchGlyph(uint64_t key, GlyphEntry& glyph);
+    void evictGlyphs();
 
     std::string fontPath;
     std::unordered_map<int, TTF_Font*> fontCache;
+    std::unordered_map<uint64_t, GlyphEntry> glyphCache;
+    std::list<uint64_t> glyphLru;
+    std::size_t glyphCacheLimitBytes = 0;
+    std::size_t glyphCacheBytes = 0;
     bool ttfInited = false;
 };
 
