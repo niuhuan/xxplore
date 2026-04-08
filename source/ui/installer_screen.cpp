@@ -5,6 +5,7 @@
 #include "ui/font_manager.hpp"
 #include "ui/renderer.hpp"
 #include "ui/theme.hpp"
+#include "util/screen_awake.hpp"
 #include <algorithm>
 #include <cstdio>
 #include <switch.h>
@@ -130,6 +131,11 @@ void InstallerScreen::startInstallWorker() {
     }
 
     worker_ = std::thread([this, items = std::move(items), installToNand, deleteAfterInstall]() mutable {
+        util::acquireScreenAwake();
+        struct ScreenAwakeRelease {
+            ~ScreenAwakeRelease() { util::releaseScreenAwake(); }
+        } screenAwakeRelease;
+
         InstallBackendCallbacks callbacks;
         callbacks.onLog = [this](const std::string& line) {
             appendLog(line);

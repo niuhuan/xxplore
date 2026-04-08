@@ -521,12 +521,14 @@ int Application::run(int argc, char* argv[]) {
         bool modalBlocking =
             modalConfirm.isOpen() || modalChoice.isOpen() || modalProgress.isOpen() ||
             modalInfo.isOpen() || modalInstallPrompt.isOpen() || imageViewer.isOpen() ||
-            installerScreen.isOpen() || settingsScreen.isOpen() || webSocketInstallerScreen.isOpen();
+            installerScreen.isOpen() || settingsScreen.isOpen() ||
+            webSocketInstallerScreen.isOpen();
         bool menuBlocking = mainMenu.isOpen();
 
         // Plus toggles menu
         if (kDown & HidNpadButton_Plus) {
-            if (installerScreen.isOpen() || imageViewer.isOpen() || webSocketInstallerScreen.isOpen()) {
+            if (installerScreen.isOpen() || imageViewer.isOpen() ||
+                webSocketInstallerScreen.isOpen()) {
                 // Reserved for screen-specific handling below.
             } else if (mainMenu.isOpen())
                 mainMenu.close();
@@ -1007,12 +1009,14 @@ int Application::run(int argc, char* argv[]) {
             mainMenu.isOpen() || modalConfirm.isOpen() || modalChoice.isOpen()
             || modalProgress.isOpen() || modalInfo.isOpen() || modalInstallPrompt.isOpen();
         if (anyOverlay && !imageViewer.isOpen() && !installerScreen.isOpen()
-            && !settingsScreen.isOpen() && !webSocketInstallerScreen.isOpen()) {
+            && !settingsScreen.isOpen()
+            && !webSocketInstallerScreen.isOpen()) {
             int scrimH = theme::HEADER_H + theme::PANEL_CONTENT_H;
             renderer.drawRectFilled(0, 0, theme::SCREEN_W, scrimH, theme::MENU_SCRIM_CONTENT);
         }
         if (!imageViewer.isOpen() && !installerScreen.isOpen()
-            && !settingsScreen.isOpen() && !webSocketInstallerScreen.isOpen())
+            && !settingsScreen.isOpen()
+            && !webSocketInstallerScreen.isOpen())
             renderFooter(renderer, fontManager, i18n);
 
         if (mainMenu.isOpen()) mainMenu.render(renderer, fontManager, i18n, menuSt);

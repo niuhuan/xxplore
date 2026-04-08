@@ -1266,13 +1266,9 @@ void finishContainerEntry(uint64_t entrySize) {
 class InstallTask {
 public:
     InstallTask(NcmStorageId storageId, bool ignoreReqFirmVersion)
-        : destStorageId(storageId), ignoreReqFirmVersion(ignoreReqFirmVersion) {
-        appletSetMediaPlaybackState(true);
-    }
+        : destStorageId(storageId), ignoreReqFirmVersion(ignoreReqFirmVersion) {}
 
-    virtual ~InstallTask() {
-        appletSetMediaPlaybackState(false);
-    }
+    virtual ~InstallTask() = default;
 
     void Prepare() {
         auto cnmtList = ReadCNMT();

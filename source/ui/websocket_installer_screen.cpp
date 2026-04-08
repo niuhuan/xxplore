@@ -4,6 +4,7 @@
 #include "ui/font_manager.hpp"
 #include "ui/renderer.hpp"
 #include "ui/theme.hpp"
+#include "util/screen_awake.hpp"
 #include <algorithm>
 #include <string>
 #include <utility>
@@ -95,6 +96,7 @@ void WebSocketInstallerScreen::open(const I18n& i18n) {
         {"error_send_read_request", i18n.t("websocket_installer.error_send_read_request")},
     };
     server_.setTextMap(std::move(textMap));
+    util::acquireScreenAwake();
     open_ = true;
     focusRow_ = 1;
     targetFocusCol_ = 1;
@@ -105,6 +107,7 @@ void WebSocketInstallerScreen::close() {
     if (!open_)
         return;
     server_.stop();
+    util::releaseScreenAwake();
     open_ = false;
 }
 

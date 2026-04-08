@@ -39,19 +39,47 @@ static bool copyFilePosix(const std::string& src, const std::string& dst,
 }
 
 static bool removeEntry(const std::string& path, std::string& errOut) {
-    std::error_code ec;
-    stdfs::path p(path);
-    if (!stdfs::exists(p, ec)) return true;
-    std::error_code ecT;
-    bool isDir = stdfs::is_directory(p, ecT);
-    (void)ecT;
-    if (isDir)
-        stdfs::remove_all(p, ec);
-    else {
-        stdfs::remove(p, ec);
-        if (ec && ::unlink(path.c_str()) == 0) ec.clear();
+    struct stat st;
+    if (::stat(path.c_str(), &st) != 0) {
+        if (errno == ENOENT)
+            return true;
+        errOut = std::string("stat: ") + strerror(errno);
+        return false;
     }
-    if (ec) { errOut = ec.message(); return false; }
+
+    if (S_ISDIR(st.st_mode)) {
+        DIR* dp = ::opendir(path.c_str());
+        if (!dp) {
+            errOut = std::string("opendir: ") + strerror(errno);
+            return false;
+        }
+
+        bool ok = true;
+        struct dirent* ep;
+        while ((ep = ::readdir(dp)) != nullptr) {
+            if (strcmp(ep->d_name, ".") == 0 || strcmp(ep->d_name, "..") == 0)
+                continue;
+            std::string child = joinPath(path, ep->d_name);
+            if (!removeEntry(child, errOut)) {
+                ok = false;
+                break;
+            }
+        }
+        ::closedir(dp);
+        if (!ok)
+            return false;
+
+        if (::rmdir(path.c_str()) != 0) {
+            errOut = std::string("rmdir: ") + strerror(errno);
+            return false;
+        }
+        return true;
+    }
+
+    if (::unlink(path.c_str()) != 0) {
+        errOut = std::string("unlink: ") + strerror(errno);
+        return false;
+    }
     return true;
 }
 
@@ -74,15 +102,33 @@ bool isDirectoryPath(const std::string& path) {
 }
 
 bool isValidEnglishFileName(const std::string& s) {
-    if (s.empty() || s.size() > 255) return false;
-    if (s == "." || s == "..") return false;
-    if (s.front() == '.' || s.back() == '.') return false;
-    for (unsigned char ch : s) {
-        if (std::isalnum(ch)) continue;
-        if (ch == '.' || ch == '_' || ch == '-') continue;
+    if (s.empty() || s.size() > 255)
         return false;
+    if (s == "." || s == "..")
+        return false;
+    if (s.back() == '.' || s.back() == ' ')
+        return false;
+
+    bool anyNonSpace = false;
+    for (unsigned char ch : s) {
+        if (ch < 0x20 || ch > 0x7e)
+            return false;
+        switch (ch) {
+        case '/':
+        case '\\':
+        case ':':
+        case '*':
+        case '?':
+        case '"':
+        case '<':
+        case '>':
+        case '|': return false;
+        default: break;
+        }
+        if (ch != ' ')
+            anyNonSpace = true;
     }
-    return true;
+    return anyNonSpace;
 }
 
 bool createDirectory(const std::string& path, std::string& errOut) {
