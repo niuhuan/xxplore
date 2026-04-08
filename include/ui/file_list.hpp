@@ -43,6 +43,8 @@ public:
     void moveCursorDown();
     void moveCursorPageUp(int pageItems);
     void moveCursorPageDown(int pageItems);
+    void setCursor(int index);
+    int  hitTestIndex(int localY) const;
     int  getCursor() const { return cursor; }
 
     /// Return the item under the cursor, or nullptr if list is empty.

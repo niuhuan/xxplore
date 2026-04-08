@@ -74,6 +74,31 @@ void FileList::moveCursorPageDown(int pageItems) {
     dirty = true;
 }
 
+void FileList::setCursor(int index) {
+    if (items.empty()) {
+        cursor = 0;
+        return;
+    }
+    if (index < 0)
+        index = 0;
+    int last = static_cast<int>(items.size()) - 1;
+    if (index > last)
+        index = last;
+    if (cursor != index) {
+        cursor = index;
+        dirty = true;
+    }
+}
+
+int FileList::hitTestIndex(int localY) const {
+    if (items.empty() || localY < 0)
+        return -1;
+    int index = (localY + scrollTop) / theme::ITEM_H;
+    if (index < 0 || index >= static_cast<int>(items.size()))
+        return -1;
+    return index;
+}
+
 const ListItem* FileList::getSelectedItem() const {
     if (cursor >= 0 && cursor < (int)items.size())
         return &items[cursor];

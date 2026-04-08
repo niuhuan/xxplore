@@ -1426,25 +1426,39 @@ int Application::run(int argc, char* argv[]) {
                 }
             }
 
-            if (!consumed && tap.active && !anim.isAnimating()) {
+            if (!consumed && tap.active) {
                 int panelY = theme::HEADER_H;
                 int panelH = theme::PANEL_CONTENT_H;
                 float lwf = anim.currentLeftW();
                 int lw = static_cast<int>(lwf);
                 int rw = theme::SCREEN_W - lw;
                 int rx = lw;
+                int activeX = activePanel == PANEL_LEFT ? 0 : rx;
+                int activeW = activePanel == PANEL_LEFT ? lw : rw;
 
                 if (tap.y >= panelY && tap.y < (panelY + panelH)) {
-                    if (activePanel == PANEL_LEFT && tap.x >= rx && tap.x < (rx + rw)) {
-                        activePanel = PANEL_RIGHT;
-                        anim.start(anim.currentLeftW(),
-                                   static_cast<float>(theme::INACTIVE_PANEL_W));
-                        consumed = true;
-                    } else if (activePanel == PANEL_RIGHT && tap.x >= 0 && tap.x < lw) {
-                        activePanel = PANEL_LEFT;
-                        anim.start(anim.currentLeftW(),
-                                   static_cast<float>(theme::ACTIVE_PANEL_W));
-                        consumed = true;
+                    if (tap.x >= activeX && tap.x < (activeX + activeW)) {
+                        int hitIndex = activeList.hitTestIndex(tap.y - panelY);
+                        if (hitIndex >= 0) {
+                            if (hitIndex == activeList.getCursor()) {
+                                baseKDown |= HidNpadButton_A;
+                            } else {
+                                activeList.setCursor(hitIndex);
+                                consumed = true;
+                            }
+                        }
+                    } else if (!anim.isAnimating()) {
+                        if (activePanel == PANEL_LEFT && tap.x >= rx && tap.x < (rx + rw)) {
+                            activePanel = PANEL_RIGHT;
+                            anim.start(anim.currentLeftW(),
+                                       static_cast<float>(theme::INACTIVE_PANEL_W));
+                            consumed = true;
+                        } else if (activePanel == PANEL_RIGHT && tap.x >= 0 && tap.x < lw) {
+                            activePanel = PANEL_LEFT;
+                            anim.start(anim.currentLeftW(),
+                                       static_cast<float>(theme::ACTIVE_PANEL_W));
+                            consumed = true;
+                        }
                     }
                 }
             }
