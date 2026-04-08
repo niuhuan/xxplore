@@ -20,6 +20,7 @@ public:
     void hide();
 
     bool isActive() const { return active_; }
+    bool isVisible() const { return active_ && visible_; }
     bool hasTimedOut() const { return timedOut_; }
 
     /// Call every frame with delta milliseconds.

@@ -1,5 +1,6 @@
 #pragma once
 #include <SDL.h>
+#include <cstdint>
 #include <set>
 #include <string>
 #include <vector>
@@ -15,6 +16,7 @@ struct ListItem {
     std::string  label;
     SDL_Texture* icon   = nullptr;  ///< Non-owning; texture lifetime managed elsewhere
     int          action = 0;
+    uint64_t     size   = 0;
     std::string  metadata;          ///< Hidden payload (e.g. network drive id)
 };
 

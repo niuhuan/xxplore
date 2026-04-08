@@ -1,4 +1,5 @@
 #pragma once
+#include "ui/touch_event.hpp"
 #include "util/app_config.hpp"
 #include <cstdint>
 #include <string>
@@ -29,7 +30,8 @@ public:
     /// True if editing an existing drive (vs creating new).
     bool isEditing() const { return editing_; }
 
-    NetworkDriveFormAction handleInput(uint64_t kDown, const I18n& i18n);
+    NetworkDriveFormAction handleInput(uint64_t kDown, const I18n& i18n,
+                                       const TouchTap* tap = nullptr);
     void render(Renderer& renderer, FontManager& fm, const I18n& i18n) const;
 
 private:

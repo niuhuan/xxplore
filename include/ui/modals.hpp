@@ -1,4 +1,5 @@
 #pragma once
+#include "ui/touch_event.hpp"
 #include <SDL.h>
 #include <string>
 
@@ -19,7 +20,7 @@ public:
     void close();
 
     bool isOpen() const { return active; }
-    ConfirmResult handleInput(uint64_t kDown);
+    ConfirmResult handleInput(uint64_t kDown, const TouchTap* tap = nullptr);
     void render(Renderer& renderer, FontManager& fm, const I18n& i18n);
 
 private:
@@ -36,7 +37,7 @@ public:
     void close();
 
     bool isOpen() const { return active; }
-    ChoiceResult handleInput(uint64_t kDown);
+    ChoiceResult handleInput(uint64_t kDown, const TouchTap* tap = nullptr);
     void render(Renderer& renderer, FontManager& fm, const I18n& i18n);
 
 private:
@@ -69,7 +70,7 @@ public:
     void close();
 
     bool isOpen() const { return active; }
-    ConfirmResult handleInput(uint64_t kDown);
+    ConfirmResult handleInput(uint64_t kDown, const TouchTap* tap = nullptr);
     void render(Renderer& renderer, FontManager& fm);
 
 private:
@@ -85,7 +86,7 @@ public:
     void close();
 
     bool isOpen() const { return active; }
-    InstallPromptResult handleInput(uint64_t kDown);
+    InstallPromptResult handleInput(uint64_t kDown, const TouchTap* tap = nullptr);
     void render(Renderer& renderer, FontManager& fm, const I18n& i18n);
 
 private:

@@ -1,4 +1,5 @@
 #pragma once
+#include "ui/touch_event.hpp"
 #include <SDL.h>
 #include <cstdint>
 #include <string>
@@ -63,7 +64,8 @@ public:
     void close();
     bool isOpen() const { return open_; }
 
-    void update(uint32_t deltaMs, uint64_t kDown, const MainMenuState& st);
+    void update(uint32_t deltaMs, uint64_t kDown, const MainMenuState& st,
+                const TouchTap* tap = nullptr);
     void render(Renderer& renderer, FontManager& fm, const I18n& i18n,
                 const MainMenuState& st);
 

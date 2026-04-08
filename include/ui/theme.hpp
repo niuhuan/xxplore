@@ -66,7 +66,7 @@ constexpr int MENU_RADIUS      = 12;
 constexpr int MENU_PADDING     = 8;
 /// Bottom sheet main menu (4-column grid)
 constexpr int MENU_SHEET_MARGIN_X = 20;
-constexpr int MENU_SHEET_TITLE_H  = 34;
+constexpr int MENU_SHEET_TITLE_H  = 54;
 constexpr int MENU_SHEET_CONTEXT_H = 56;
 constexpr int MENU_SHEET_CELL_H   = 50;
 constexpr int MENU_SHEET_ROWS     = 5; ///< Action rows under context

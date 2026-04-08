@@ -1,6 +1,7 @@
 #include "ui/main_menu.hpp"
 #include "ui/renderer.hpp"
 #include "ui/font_manager.hpp"
+#include "ui/panel_chrome.hpp"
 #include "ui/theme.hpp"
 #include "i18n/i18n.hpp"
 #include <switch.h>
@@ -138,7 +139,8 @@ void BottomMainMenu::activateCell(const MainMenuState& st) {
         pending_ = cmd;
 }
 
-void BottomMainMenu::update(uint32_t deltaMs, uint64_t kDown, const MainMenuState& st) {
+void BottomMainMenu::update(uint32_t deltaMs, uint64_t kDown, const MainMenuState& st,
+                            const TouchTap* tap) {
     if (!open_) return;
 
     float dur = static_cast<float>(theme::MENU_SHEET_ANIM_MS);
@@ -151,6 +153,48 @@ void BottomMainMenu::update(uint32_t deltaMs, uint64_t kDown, const MainMenuStat
     }
 
     if (anim_ < 1.0f) return;
+
+    if (tap && tap->active) {
+        int mx = theme::MENU_SHEET_MARGIN_X;
+        int mw = theme::SCREEN_W - mx * 2;
+        int sh = theme::MENU_SHEET_TITLE_H + theme::MENU_SHEET_CONTEXT_H + 1 +
+                 theme::MENU_SHEET_ROWS * theme::MENU_SHEET_CELL_H + theme::MENU_PADDING * 2;
+        int y = theme::SCREEN_H - theme::FOOTER_H - sh;
+        if (ui::panelCloseButtonHit(mx, y, mw, tap->x, tap->y)) {
+            pending_ = MenuCommand::CloseMenu;
+            return;
+        }
+
+        int ty = y + theme::MENU_PADDING;
+        int ctxY = ty + theme::MENU_SHEET_TITLE_H;
+        int ctxInnerW = mw - theme::MENU_PADDING * 2;
+        if (pointInRect(tap, mx + theme::MENU_PADDING, ctxY, ctxInnerW, theme::MENU_SHEET_CONTEXT_H)) {
+            focusRow_ = 1;
+            focusCol_ = 0;
+            pending_ = MenuCommand::CloseMenu;
+            return;
+        }
+
+        int cellW = (mw - theme::MENU_PADDING * 2) / 4;
+        int gridTop = ty + theme::MENU_SHEET_TITLE_H + theme::MENU_SHEET_CONTEXT_H + 1;
+        for (int row = 2; row <= 5; ++row) {
+            for (int col = 0; col < 4; ++col) {
+                int cx = mx + theme::MENU_PADDING + col * cellW;
+                int cy = gridTop + (row - 2) * theme::MENU_SHEET_CELL_H;
+                if (!pointInRect(tap, cx, cy, cellW, theme::MENU_SHEET_CELL_H))
+                    continue;
+                if (cellDisabled(row, col, st))
+                    return;
+                MenuCommand cmd = cmdAt(row, col, st);
+                if (cmd == MenuCommand::None)
+                    return;
+                focusRow_ = row;
+                focusCol_ = col;
+                pending_ = cmd;
+                return;
+            }
+        }
+    }
 
     if (kDown & HidNpadButton_AnyUp) moveFocusVertical(-1, st);
     if (kDown & HidNpadButton_AnyDown) moveFocusVertical(1, st);
@@ -210,9 +254,9 @@ void BottomMainMenu::render(Renderer& renderer, FontManager& fm, const I18n& i18
     int ty = y + MENU_PADDING;
 
     // --- Title row ---
-    char hdr[160];
-    snprintf(hdr, sizeof(hdr), "%s   %s", i18n.t("menu.title"), i18n.t("menu.hints"));
-    fm.drawText(renderer.sdl(), hdr, tx, ty, FONT_SIZE_SMALL, TEXT_SECONDARY);
+    ui::drawPanelTitleBar(renderer, fm, mx, y, mw, i18n.t("menu.title"), true, false);
+    fm.drawText(renderer.sdl(), i18n.t("menu.hints"), tx + PADDING_SM,
+                ty + MENU_SHEET_TITLE_H - FONT_SIZE_SMALL - 8, FONT_SIZE_SMALL, TEXT_SECONDARY);
     ty += MENU_SHEET_TITLE_H;
 
     // --- Context row (current folder) ---

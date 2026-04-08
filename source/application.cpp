@@ -17,6 +17,7 @@
 #include "ui/renderer.hpp"
 #include "ui/settings_screen.hpp"
 #include "ui/theme.hpp"
+#include "ui/touch_event.hpp"
 #include "ui/toast.hpp"
 #include "ui/websocket_installer_screen.hpp"
 #include "util/app_config.hpp"
@@ -156,18 +157,19 @@ static bool buildItemsForPath(const std::string& path, const std::vector<IconEnt
             li.label = r.name;
             li.icon = findIcon(icons, iconName);
             li.action = ACTION_ENTER;
+            li.size = r.size;
             li.metadata = metadata;
             items.push_back(std::move(li));
         }
         items.push_back({i18n.t("root.websocket_installer"), findIcon(icons, "download"),
-                         ACTION_WEBSOCKET_INSTALLER});
+                         ACTION_WEBSOCKET_INSTALLER, 0});
         items.push_back({i18n.t("root.add_network_drive"), findIcon(icons, "add"),
-                         ACTION_ADD_NETWORK_DRIVE});
+                         ACTION_ADD_NETWORK_DRIVE, 0});
         itemsOut = std::move(items);
         return true;
     }
 
-    items.push_back({"..", findIcon(icons, "back"), ACTION_GO_UP});
+    items.push_back({"..", findIcon(icons, "back"), ACTION_GO_UP, 0});
     std::string errListDir;
     auto entries = provMgr.listDir(path, errListDir);
     if (!errListDir.empty()) {
@@ -177,7 +179,7 @@ static bool buildItemsForPath(const std::string& path, const std::vector<IconEnt
     }
     for (auto& e : entries) {
         int action = e.isDirectory ? ACTION_ENTER : ACTION_NONE;
-        items.push_back({e.name, findIcon(icons, fs::iconForEntry(e)), action});
+        items.push_back({e.name, findIcon(icons, fs::iconForEntry(e)), action, e.size});
     }
     itemsOut = std::move(items);
     return true;
@@ -335,6 +337,7 @@ int Application::run(int argc, char* argv[]) {
 
     const int pageItems = theme::PANEL_CONTENT_H / theme::ITEM_H;
     uint32_t lastTick = SDL_GetTicks();
+    bool touchWasDown = false;
 
     PendingConfirm pendingConfirm = PendingConfirm::None;
     std::vector<std::string> pendingDeletePaths;
@@ -457,15 +460,10 @@ int Application::run(int argc, char* argv[]) {
             if (!fs::isInstallPackagePath(fullPath))
                 return;
 
-            fs::FileStatInfo statInfo;
-            std::string statErr;
-            if (!provMgr.statPath(fullPath, statInfo, statErr) || statInfo.isDirectory)
-                return;
-
             InstallQueueItem queueItem;
             queueItem.path = fullPath;
             queueItem.name = item.label;
-            queueItem.size = statInfo.size;
+            queueItem.size = item.size;
             result.push_back(std::move(queueItem));
         };
 
@@ -725,6 +723,15 @@ int Application::run(int argc, char* argv[]) {
 
         padUpdate(&pad);
         u64 kDown = padGetButtonsDown(&pad);
+        HidTouchScreenState touchState {};
+        hidGetTouchScreenStates(&touchState, 1);
+        TouchTap tap;
+        if (touchState.count > 0 && !touchWasDown) {
+            tap.active = true;
+            tap.x = static_cast<int>(touchState.touches[0].x);
+            tap.y = static_cast<int>(touchState.touches[0].y);
+        }
+        touchWasDown = touchState.count > 0;
 
         PanelState& active   = activeRef();
         FileList& activeList = active.list;
@@ -734,7 +741,7 @@ int Application::run(int argc, char* argv[]) {
             modalInfo.isOpen() || modalInstallPrompt.isOpen() || imageViewer.isOpen() ||
             installerScreen.isOpen() || settingsScreen.isOpen() ||
             webSocketInstallerScreen.isOpen() || networkDriveForm.isOpen() ||
-            loadingOverlay.isActive();
+            pendingPanelLoad.active || loadingOverlay.isVisible();
         bool menuBlocking = mainMenu.isOpen();
 
         // Plus toggles menu
@@ -753,7 +760,7 @@ int Application::run(int argc, char* argv[]) {
         }
 
         if (settingsScreen.isOpen()) {
-            SettingsAction action = settingsScreen.handleInput(kDown);
+            SettingsAction action = settingsScreen.handleInput(kDown, &tap);
             if (action == SettingsAction::Close) {
                 settingsScreen.close();
             } else if (action == SettingsAction::Save) {
@@ -783,7 +790,7 @@ int Application::run(int argc, char* argv[]) {
         }
 
         if (networkDriveForm.isOpen()) {
-            NetworkDriveFormAction formAction = networkDriveForm.handleInput(kDown, i18n);
+            NetworkDriveFormAction formAction = networkDriveForm.handleInput(kDown, i18n, &tap);
             if (formAction == NetworkDriveFormAction::Close) {
                 networkDriveForm.close();
             } else if (formAction == NetworkDriveFormAction::Save) {
@@ -866,7 +873,7 @@ int Application::run(int argc, char* argv[]) {
 
         if (installerScreen.isOpen()) {
             installerScreen.update();
-            InstallerAction action = installerScreen.handleInput(kDown);
+            InstallerAction action = installerScreen.handleInput(kDown, &tap);
             if (action == InstallerAction::Close) {
                 if (installerScreen.shouldRefreshOnClose())
                     refreshInstallAffectedDirs(installerScreen.sourceDirectories());
@@ -876,7 +883,7 @@ int Application::run(int argc, char* argv[]) {
         }
 
         if (modalConfirm.isOpen()) {
-            ConfirmResult cr = modalConfirm.handleInput(kDown);
+            ConfirmResult cr = modalConfirm.handleInput(kDown, &tap);
             if (cr == ConfirmResult::Confirmed) {
                 if (pendingConfirm == PendingConfirm::DeleteItems) {
                     modalConfirm.close();
@@ -946,7 +953,7 @@ int Application::run(int argc, char* argv[]) {
         }
 
         if (modalChoice.isOpen()) {
-            ChoiceResult ch = modalChoice.handleInput(kDown);
+            ChoiceResult ch = modalChoice.handleInput(kDown, &tap);
             if (ch != ChoiceResult::None) {
                 modalChoice.close();
                 if (ch == ChoiceResult::Cancel || pendingConfirm != PendingConfirm::PasteChoice) {
@@ -995,11 +1002,11 @@ int Application::run(int argc, char* argv[]) {
         }
 
         if (modalInfo.isOpen()) {
-            if (modalInfo.handleInput(kDown) != ConfirmResult::None) modalInfo.close();
+            if (modalInfo.handleInput(kDown, &tap) != ConfirmResult::None) modalInfo.close();
         }
 
         if (modalInstallPrompt.isOpen()) {
-            InstallPromptResult result = modalInstallPrompt.handleInput(kDown);
+            InstallPromptResult result = modalInstallPrompt.handleInput(kDown, &tap);
             if (result != InstallPromptResult::None) {
                 modalInstallPrompt.close();
                 if (result == InstallPromptResult::Install ||
@@ -1099,7 +1106,7 @@ int Application::run(int argc, char* argv[]) {
         fillMenuState(menuSt);
 
         if (mainMenu.isOpen()) {
-            mainMenu.update(delta, kDown, menuSt);
+            mainMenu.update(delta, kDown, menuSt, &tap);
             MenuCommand cmd = mainMenu.takeCommand();
             switch (cmd) {
             case MenuCommand::CloseMenu: mainMenu.close(); break;
@@ -1427,7 +1434,7 @@ int Application::run(int argc, char* argv[]) {
         const bool anyOverlay =
             mainMenu.isOpen() || modalConfirm.isOpen() || modalChoice.isOpen()
             || modalProgress.isOpen() || modalInfo.isOpen() || modalInstallPrompt.isOpen()
-            || networkDriveForm.isOpen() || loadingOverlay.isActive();
+            || networkDriveForm.isOpen() || loadingOverlay.isVisible();
         if (anyOverlay && !imageViewer.isOpen() && !installerScreen.isOpen()
             && !settingsScreen.isOpen()
             && !webSocketInstallerScreen.isOpen()) {

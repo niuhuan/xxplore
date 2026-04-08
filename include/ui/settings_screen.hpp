@@ -1,5 +1,6 @@
 #pragma once
 #include "util/app_config.hpp"
+#include "ui/touch_event.hpp"
 #include <cstdint>
 
 namespace xplore {
@@ -18,7 +19,7 @@ public:
     bool isOpen() const { return open_; }
     config::AppLanguage selectedLanguage() const { return selectedLanguage_; }
 
-    SettingsAction handleInput(uint64_t kDown);
+    SettingsAction handleInput(uint64_t kDown, const TouchTap* tap = nullptr);
     void render(Renderer& renderer, FontManager& fm, const I18n& i18n) const;
 
 private:

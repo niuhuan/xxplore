@@ -1,6 +1,7 @@
 #include "ui/settings_screen.hpp"
 #include "i18n/i18n.hpp"
 #include "ui/font_manager.hpp"
+#include "ui/panel_chrome.hpp"
 #include "ui/renderer.hpp"
 #include "ui/theme.hpp"
 #include "util/app_config.hpp"
@@ -107,9 +108,49 @@ void SettingsScreen::moveVertical(int delta) {
     }
 }
 
-SettingsAction SettingsScreen::handleInput(uint64_t kDown) {
+SettingsAction SettingsScreen::handleInput(uint64_t kDown, const TouchTap* tap) {
     if (!open_)
         return SettingsAction::None;
+
+    const int cardX = 40;
+    const int cardY = 70;
+    const int cardW = theme::SCREEN_W - 80;
+    const int x = cardX + 24;
+    const int gridY = cardY + ui::kPanelTitleBarH + 12 + 34 + 24;
+    const int gridCols = static_cast<int>(sizeof(kLanguages) / sizeof(kLanguages[0]));
+    const int gap = 10;
+    const int cellW = (cardW - 48 - gap * (gridCols - 1)) / gridCols;
+    const int cellH = 54;
+    const int buttonY = gridY + cellH + 24;
+    const int buttonW = 200;
+    const int buttonH = 44;
+    const int buttonGap = 18;
+
+    if (tap && tap->active) {
+        if (ui::panelCloseButtonHit(cardX, cardY, cardW, tap->x, tap->y))
+            return SettingsAction::Close;
+
+        for (int col = 0; col < gridCols; ++col) {
+            int cellX = x + col * (cellW + gap);
+            if (pointInRect(tap, cellX, gridY, cellW, cellH)) {
+                focusRow_ = 0;
+                languageFocusCol_ = col;
+                selectedLanguage_ = kLanguages[col].language;
+                return SettingsAction::None;
+            }
+        }
+
+        if (pointInRect(tap, x, buttonY, buttonW, buttonH)) {
+            focusRow_ = 1;
+            buttonFocusCol_ = 0;
+            return SettingsAction::Close;
+        }
+        if (pointInRect(tap, x + buttonW + buttonGap, buttonY, buttonW, buttonH)) {
+            focusRow_ = 1;
+            buttonFocusCol_ = 1;
+            return SettingsAction::Save;
+        }
+    }
 
     if (kDown & HidNpadButton_B)
         return SettingsAction::Close;
@@ -151,12 +192,10 @@ void SettingsScreen::render(Renderer& renderer, FontManager& fm, const I18n& i18
     renderer.drawRoundedRectFilled(cardX, cardY, cardW, cardH, 16, theme::MENU_BG);
     renderer.drawRoundedRect(cardX, cardY, cardW, cardH, 16, theme::MENU_BORDER);
 
-    const int x = cardX + 24;
-    int y = cardY + 20;
+    ui::drawPanelTitleBar(renderer, fm, cardX, cardY, cardW, i18n.t("menu.settings"), true, false);
 
-    fm.drawText(renderer.sdl(), i18n.t("menu.settings"), x, y, theme::FONT_SIZE_TITLE,
-                theme::PRIMARY);
-    y += 32;
+    const int x = cardX + 24;
+    int y = cardY + ui::kPanelTitleBarH + 12;
 
     std::string hints = "+:";
     hints += i18n.t("settings.save");

@@ -50,6 +50,9 @@ public:
     bool isConnected() const { return connected_; }
 
 private:
+    bool shouldReconnect(const std::string& err) const;
+    bool reconnect(std::string& errOut);
+
     std::string id_;
     std::string name_;
     std::string server_;

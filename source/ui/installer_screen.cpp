@@ -236,7 +236,7 @@ void InstallerScreen::update() {
     appendLog("Install queue ready.");
 }
 
-InstallerAction InstallerScreen::handleInput(uint64_t kDown) {
+InstallerAction InstallerScreen::handleInput(uint64_t kDown, const TouchTap* tap) {
     bool shouldStartInstall = false;
     {
         std::lock_guard<std::mutex> lock(mutex_);
@@ -259,6 +259,41 @@ InstallerAction InstallerScreen::handleInput(uint64_t kDown) {
             if (kDown & (HidNpadButton_B | HidNpadButton_Plus))
                 return InstallerAction::Close;
             return InstallerAction::None;
+        }
+
+        const int cardX = 40;
+        const int cardY = 40;
+        const int x = cardX + 24;
+        const int summaryY = cardY + 20 + 34 + 40;
+        const int targetW = 180;
+        const int targetH = 42;
+        const int targetGap = 16;
+        const int targetsY = summaryY + 22;
+        const int buttonsY = targetsY + targetH + 28;
+
+        if (tap && tap->active && state_ == State::Ready) {
+            if (pointInRect(tap, x, targetsY, targetW, targetH)) {
+                focusRow_ = 0;
+                targetFocusCol_ = 0;
+                target_ = InstallTarget::Nand;
+                return InstallerAction::None;
+            }
+            if (pointInRect(tap, x + targetW + targetGap, targetsY, targetW, targetH)) {
+                focusRow_ = 0;
+                targetFocusCol_ = 1;
+                target_ = InstallTarget::SdCard;
+                return InstallerAction::None;
+            }
+            if (pointInRect(tap, x, buttonsY, targetW, targetH)) {
+                focusRow_ = 1;
+                buttonFocusCol_ = 0;
+                return InstallerAction::Close;
+            }
+            if (pointInRect(tap, x + targetW + targetGap, buttonsY, targetW, targetH)) {
+                focusRow_ = 1;
+                buttonFocusCol_ = 1;
+                shouldStartInstall = true;
+            }
         }
 
         if (kDown & HidNpadButton_B)

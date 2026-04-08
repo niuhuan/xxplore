@@ -2,6 +2,7 @@
 #include "i18n/i18n.hpp"
 #include "swkbd_input.hpp"
 #include "ui/font_manager.hpp"
+#include "ui/panel_chrome.hpp"
 #include "ui/renderer.hpp"
 #include "ui/theme.hpp"
 #include "util/app_config.hpp"
@@ -9,6 +10,15 @@
 #include <switch.h>
 
 namespace xplore {
+
+namespace {
+
+SDL_Color withAlpha(SDL_Color color, Uint8 alpha) {
+    color.a = alpha;
+    return color;
+}
+
+} // namespace
 
 void NetworkDriveForm::openNew() {
     open_ = true;
@@ -91,9 +101,63 @@ void NetworkDriveForm::activateRow(const I18n& i18n) {
     }
 }
 
-NetworkDriveFormAction NetworkDriveForm::handleInput(uint64_t kDown, const I18n& i18n) {
+NetworkDriveFormAction NetworkDriveForm::handleInput(uint64_t kDown, const I18n& i18n,
+                                                     const TouchTap* tap) {
     if (!open_)
         return NetworkDriveFormAction::None;
+
+    const int cardX = 80;
+    const int cardY = 50;
+    const int cardW = theme::SCREEN_W - 160;
+    const int x = cardX + 24;
+    const int rowH = 52;
+    const int labelW = 160;
+    const int valueX = x + labelW;
+    const int valueW = cardW - 48 - labelW;
+    const int typeCellGap = 12;
+    const int typeCellW = (valueW - typeCellGap) / 2;
+    const int rowsTopY = cardY + ui::kPanelTitleBarH + 12 + 30;
+    const int buttonsY = rowsTopY + (rowH + 8) * 5 + 8;
+    const int buttonW = 200;
+    const int buttonH = 44;
+    const int buttonGap = 18;
+
+    if (tap && tap->active) {
+        if (ui::panelCloseButtonHit(cardX, cardY, cardW, tap->x, tap->y))
+            return NetworkDriveFormAction::Close;
+
+        int rowY = rowsTopY;
+        for (int row = kRowName; row <= kRowPassword; ++row) {
+            if (row == kRowType) {
+                if (pointInRect(tap, valueX, rowY, typeCellW, rowH)) {
+                    focusRow_ = kRowType;
+                    config_.type = config::NetworkDriveType::WebDAV;
+                    return NetworkDriveFormAction::None;
+                }
+                if (pointInRect(tap, valueX + typeCellW + typeCellGap, rowY, typeCellW, rowH)) {
+                    focusRow_ = kRowType;
+                    config_.type = config::NetworkDriveType::SMB2;
+                    return NetworkDriveFormAction::None;
+                }
+            } else if (pointInRect(tap, x, rowY, cardW - 48, rowH)) {
+                focusRow_ = row;
+                activateRow(i18n);
+                return NetworkDriveFormAction::None;
+            }
+            rowY += rowH + 8;
+        }
+
+        if (pointInRect(tap, x, buttonsY, buttonW, buttonH)) {
+            focusRow_ = kRowButtons;
+            buttonFocusCol_ = 0;
+            return NetworkDriveFormAction::Close;
+        }
+        if (pointInRect(tap, x + buttonW + buttonGap, buttonsY, buttonW, buttonH)) {
+            focusRow_ = kRowButtons;
+            buttonFocusCol_ = 1;
+            return NetworkDriveFormAction::Save;
+        }
+    }
 
     if (kDown & HidNpadButton_B)
         return NetworkDriveFormAction::Close;
@@ -132,14 +196,12 @@ void NetworkDriveForm::render(Renderer& renderer, FontManager& fm, const I18n& i
     renderer.drawRoundedRectFilled(cardX, cardY, cardW, cardH, 16, MENU_BG);
     renderer.drawRoundedRect(cardX, cardY, cardW, cardH, 16, MENU_BORDER);
 
-    const int x = cardX + 24;
-    int y = cardY + 20;
-
-    // Title
     const char* title = editing_ ? i18n.t("network_form.title_edit")
                                  : i18n.t("network_form.title_add");
-    fm.drawText(renderer.sdl(), title, x, y, FONT_SIZE_TITLE, PRIMARY);
-    y += 32;
+    ui::drawPanelTitleBar(renderer, fm, cardX, cardY, cardW, title, true, false);
+
+    const int x = cardX + 24;
+    int y = cardY + ui::kPanelTitleBarH + 12;
 
     // Hints line
     std::string hints = "B:";
@@ -164,16 +226,13 @@ void NetworkDriveForm::render(Renderer& renderer, FontManager& fm, const I18n& i
         return std::string(pw.size(), '*');
     };
 
-    const char* typeLabel = config_.type == config::NetworkDriveType::WebDAV
-                                ? "WebDAV"
-                                : "SMB2.0";
     const char* addressPlaceholder = config_.type == config::NetworkDriveType::WebDAV
                                          ? "http://192.168.1.1/dav"
                                          : "192.168.1.1/share";
 
     Row rows[] = {
         {i18n.t("network_form.name"),     config_.name.empty() ? i18n.t("network_form.name_hint") : config_.name, kRowName},
-        {i18n.t("network_form.type"),     typeLabel, kRowType},
+        {i18n.t("network_form.type"),     "", kRowType},
         {i18n.t("network_form.address"),  config_.address.empty() ? addressPlaceholder : config_.address, kRowAddress},
         {i18n.t("network_form.username"), config_.username.empty() ? i18n.t("network_form.username_hint") : config_.username, kRowUsername},
         {i18n.t("network_form.password"), config_.password.empty() ? i18n.t("network_form.password_hint") : maskPassword(config_.password), kRowPassword},
@@ -197,12 +256,35 @@ void NetworkDriveForm::render(Renderer& renderer, FontManager& fm, const I18n& i
         SDL_Color valColor = isEmpty ? TEXT_DISABLED : TEXT;
 
         if (row.rowIdx == kRowType) {
-            // Show type toggle: < WebDAV > or < SMB2.0 >
-            std::string display = "< ";
-            display += row.value;
-            display += " >";
-            fm.drawTextEllipsis(renderer.sdl(), display.c_str(), valueX, textY,
-                                FONT_SIZE_ITEM, focused ? PRIMARY : TEXT, valueW);
+            const int typeCellGap = 12;
+            const int typeCellW = (valueW - typeCellGap) / 2;
+            struct TypeCell {
+                const char* label;
+                bool active;
+                int x;
+            };
+            const TypeCell typeCells[] = {
+                {"WebDAV", config_.type == config::NetworkDriveType::WebDAV, valueX},
+                {"SMB2.0", config_.type == config::NetworkDriveType::SMB2,
+                 valueX + typeCellW + typeCellGap},
+            };
+            for (const auto& cell : typeCells) {
+                SDL_Color typeBg = SURFACE;
+                SDL_Color typeBorder = DIVIDER;
+                SDL_Color typeText = TEXT;
+                if (cell.active) {
+                    typeBg = withAlpha(PRIMARY, focused ? 0xff : 0x66);
+                    typeBorder = focused ? PRIMARY : PRIMARY_DIM;
+                    typeText = focused ? ON_PRIMARY : PRIMARY;
+                } else if (focused) {
+                    typeBg = SURFACE_HOVER;
+                    typeBorder = PRIMARY;
+                }
+                renderer.drawRoundedRectFilled(cell.x, y, typeCellW, rowH, 10, typeBg);
+                renderer.drawRoundedRect(cell.x, y, typeCellW, rowH, 10, typeBorder);
+                fm.drawText(renderer.sdl(), cell.label, cell.x + 16,
+                            y + (rowH - FONT_SIZE_ITEM) / 2, FONT_SIZE_ITEM, typeText);
+            }
         } else {
             fm.drawTextEllipsis(renderer.sdl(), row.value.c_str(), valueX, textY,
                                 FONT_SIZE_ITEM, valColor, valueW);

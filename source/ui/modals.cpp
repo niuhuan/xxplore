@@ -1,6 +1,7 @@
 #include "ui/modals.hpp"
 #include "ui/renderer.hpp"
 #include "ui/font_manager.hpp"
+#include "ui/panel_chrome.hpp"
 #include "ui/theme.hpp"
 #include "i18n/i18n.hpp"
 #include <switch.h>
@@ -26,8 +27,26 @@ void ModalConfirm::close() {
     body.clear();
 }
 
-ConfirmResult ModalConfirm::handleInput(uint64_t kDown) {
+ConfirmResult ModalConfirm::handleInput(uint64_t kDown, const TouchTap* tap) {
     if (!active) return ConfirmResult::None;
+    int cx = (theme::SCREEN_W - kCardW) / 2;
+    int cy = (theme::SCREEN_H - kCardH) / 2;
+    int btnY = cy + kCardH - 56;
+    int cancelW = 120;
+    int okW = 120;
+    int gap = 40;
+    int total = cancelW + gap + okW;
+    int bx = cx + (kCardW - total) / 2;
+    if (tap && tap->active) {
+        if (pointInRect(tap, bx - 12, btnY - 8, cancelW, 36)) {
+            focusOk = 0;
+            return ConfirmResult::Cancelled;
+        }
+        if (pointInRect(tap, bx + cancelW + gap - 12, btnY - 8, okW, 36)) {
+            focusOk = 1;
+            return ConfirmResult::Confirmed;
+        }
+    }
     if (kDown & HidNpadButton_A)
         return focusOk ? ConfirmResult::Confirmed : ConfirmResult::Cancelled;
     if (kDown & HidNpadButton_B)
@@ -84,8 +103,24 @@ void ModalChoice::close() {
     body.clear();
 }
 
-ChoiceResult ModalChoice::handleInput(uint64_t kDown) {
+ChoiceResult ModalChoice::handleInput(uint64_t kDown, const TouchTap* tap) {
     if (!active) return ChoiceResult::None;
+    int cx = (theme::SCREEN_W - kCardW) / 2;
+    int cy = (theme::SCREEN_H - kCardH) / 2;
+    int btnY = cy + kCardH - 56;
+    int gap  = 30;
+    const int hitW = 140;
+    int total = hitW * 3 + gap * 2;
+    int bx = cx + (kCardW - total) / 2;
+    if (tap && tap->active) {
+        for (int i = 0; i < 3; ++i) {
+            if (!pointInRect(tap, bx + i * (hitW + gap), btnY - 8, hitW, 36))
+                continue;
+            focus = i;
+            return i == 0 ? ChoiceResult::Cancel
+                          : (i == 1 ? ChoiceResult::Merge : ChoiceResult::Overwrite);
+        }
+    }
     if (kDown & HidNpadButton_B)
         return ChoiceResult::Cancel;
     if (kDown & HidNpadButton_A) {
@@ -195,8 +230,14 @@ void ModalInfo::close() {
     body.clear();
 }
 
-ConfirmResult ModalInfo::handleInput(uint64_t kDown) {
+ConfirmResult ModalInfo::handleInput(uint64_t kDown, const TouchTap* tap) {
     if (!active) return ConfirmResult::None;
+    int cardH = 420;
+    int cx    = (theme::SCREEN_W - kCardW) / 2;
+    int cy    = (theme::SCREEN_H - cardH) / 2;
+    if (tap && tap->active &&
+        ui::panelCloseButtonHit(cx, cy, kCardW, tap->x, tap->y))
+        return ConfirmResult::Confirmed;
     if (kDown & (HidNpadButton_A | HidNpadButton_B))
         return ConfirmResult::Confirmed;
     return ConfirmResult::None;
@@ -213,10 +254,10 @@ void ModalInfo::render(Renderer& renderer, FontManager& fm) {
     renderer.drawRoundedRectFilled(cx, cy, kCardW, cardH, MENU_RADIUS, MENU_BG);
     renderer.drawRoundedRect(cx, cy, kCardW, cardH, MENU_RADIUS, MENU_BORDER);
 
+    ui::drawPanelTitleBar(renderer, fm, cx, cy, kCardW, title.c_str(), true, false);
+
     int tx = cx + kPad;
-    int ty = cy + kPad;
-    fm.drawText(renderer.sdl(), title.c_str(), tx, ty, FONT_SIZE_ITEM, TEXT);
-    ty += FONT_SIZE_ITEM + 12;
+    int ty = cy + ui::kPanelTitleBarH + 12;
 
     const char* p = body.c_str();
     int lineH = fm.fontHeight(FONT_SIZE_SMALL) + 4;
@@ -247,8 +288,27 @@ void ModalInstallPrompt::close() {
     body.clear();
 }
 
-InstallPromptResult ModalInstallPrompt::handleInput(uint64_t kDown) {
+InstallPromptResult ModalInstallPrompt::handleInput(uint64_t kDown, const TouchTap* tap) {
     if (!active) return InstallPromptResult::None;
+    int cx = (theme::SCREEN_W - kCardW) / 2;
+    int cy = (theme::SCREEN_H - kCardH) / 2;
+    int btnY = cy + kCardH - 56;
+    const int hitW = 160;
+    const int gap = 24;
+    int total = hitW * 3 + gap * 2;
+    int bx = cx + (kCardW - total) / 2;
+    if (tap && tap->active) {
+        for (int i = 0; i < 3; ++i) {
+            if (!pointInRect(tap, bx + i * (hitW + gap), btnY - 8, hitW, 36))
+                continue;
+            focus = i;
+            switch (i) {
+            case 0: return InstallPromptResult::Cancel;
+            case 1: return InstallPromptResult::Install;
+            default: return InstallPromptResult::InstallAndDelete;
+            }
+        }
+    }
     if (kDown & HidNpadButton_B)
         return InstallPromptResult::Cancel;
     if (kDown & HidNpadButton_A) {

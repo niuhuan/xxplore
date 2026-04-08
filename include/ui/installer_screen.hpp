@@ -1,4 +1,5 @@
 #pragma once
+#include "ui/touch_event.hpp"
 #include <cstdint>
 #include <deque>
 #include <memory>
@@ -39,7 +40,7 @@ public:
     std::vector<std::string> sourceDirectories() const;
 
     void update();
-    InstallerAction handleInput(uint64_t kDown);
+    InstallerAction handleInput(uint64_t kDown, const TouchTap* tap = nullptr);
     void render(Renderer& renderer, FontManager& fm, const I18n& i18n) const;
 
 private:
