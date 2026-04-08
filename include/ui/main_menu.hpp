@@ -21,6 +21,7 @@ enum class MenuCommand {
     Paste,
     ViewClipboard,
     ClearClipboard,
+    InstallApplications,
     Settings,
     Help,
     About,
@@ -43,6 +44,7 @@ struct MainMenuState {
     bool disablePaste        = false;
     bool disableViewClip     = false;
     bool disableClearClip    = false;
+    bool disableInstall      = false;
     bool disableSettings     = false;
     bool disableHelp         = false;
     bool disableAbout        = false;

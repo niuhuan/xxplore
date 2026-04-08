@@ -518,6 +518,31 @@ int Application::run(int argc, char* argv[]) {
         modalInstallPrompt.open(i18n.t("installer.prompt_title"), body);
     };
 
+    auto startInstaller = [&](std::vector<InstallQueueItem> items) {
+        if (items.empty())
+            return;
+        auto sourceCallbacks = std::make_shared<InstallDataSourceCallbacks>();
+        sourceCallbacks->readRange =
+            [&provMgr](const InstallQueueItem& item, uint64_t offset, size_t size,
+                       void* outBuffer, std::string& errOut) {
+                return provMgr.readFile(item.path, offset, size, outBuffer, errOut);
+            };
+        installerScreen.open(std::move(items), InstallDeleteMode::KeepFiles, appletMode,
+                             sourceCallbacks);
+        activeRef().list.clearSelection();
+        pendingInstallItems.clear();
+    };
+
+    auto installItemsForMenu = [&](PanelState& panel) {
+        bool hasSelection = panel.list.hasSelection();
+        bool currentSelected = hasSelection && panel.list.isSelected(panel.list.getCursor());
+        if (hasSelection && allSelectedInstallPackages(panel))
+            return buildInstallItems(panel, true);
+        if (!hasSelection || !currentSelected)
+            return buildInstallItems(panel, false);
+        return std::vector<InstallQueueItem>{};
+    };
+
     auto openImageFile = [&](const std::string& path) {
         fs::FileStatInfo statInfo;
         std::string statErr;
@@ -582,7 +607,7 @@ int Application::run(int argc, char* argv[]) {
             st.disableNewFolder = true;
             st.disableDelete = true;
             st.disableCopy = st.disableCut = st.disablePaste = true;
-            st.disableViewClip = st.disableClearClip = true;
+            st.disableViewClip = st.disableClearClip = st.disableInstall = true;
             st.disableSettings = st.disableHelp = st.disableAbout = st.disableExit = false;
 
             // Check if cursor is on a network drive entry
@@ -605,7 +630,7 @@ int Application::run(int argc, char* argv[]) {
             st.disableSelectToggle = true;
             st.disableRename = st.disableNewFolder = st.disableDelete = true;
             st.disableCopy = st.disableCut = st.disablePaste = true;
-            st.disableViewClip = st.disableClearClip = true;
+            st.disableViewClip = st.disableClearClip = st.disableInstall = true;
             st.disableSettings = st.disableHelp = st.disableAbout = st.disableExit = false;
             char ctxBuf[256];
             snprintf(ctxBuf, sizeof(ctxBuf), "%s %s", i18n.t("menu.context_current"), a.path.c_str());
@@ -646,6 +671,7 @@ int Application::run(int argc, char* argv[]) {
         st.disablePaste     = pasteDis;
         st.disableViewClip  = clipEmpty;
         st.disableClearClip = clipEmpty;
+        st.disableInstall   = installItemsForMenu(a).empty();
         st.disableSettings = st.disableHelp = st.disableAbout = st.disableExit = false;
     };
 
@@ -1121,6 +1147,16 @@ int Application::run(int argc, char* argv[]) {
                 toast.show(i18n.t("toast.clipboard_cleared"), "", ToastKind::Info, 2000);
                 mainMenu.close();
                 break;
+            case MenuCommand::InstallApplications: {
+                std::vector<InstallQueueItem> items = installItemsForMenu(active);
+                if (items.empty()) {
+                    mainMenu.close();
+                    break;
+                }
+                mainMenu.close();
+                startInstaller(std::move(items));
+                break;
+            }
             case MenuCommand::Copy:
             case MenuCommand::Cut: {
                 std::vector<fs::ClipboardEntry> ents;
