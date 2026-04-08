@@ -66,7 +66,7 @@ private:
 /// Scroll-free multi-line info (help / about / clipboard list). B = close.
 class ModalInfo {
 public:
-    void open(std::string title, std::string body);
+    void open(std::string title, std::string body, int bodyFontSize = 0);
     void close();
 
     bool isOpen() const { return active; }
@@ -77,6 +77,7 @@ private:
     bool        active = false;
     std::string title;
     std::string body;
+    int         bodyFontSize = 0;
 };
 
 /// Three-button install prompt: Cancel / Install / Install+Delete.

@@ -173,6 +173,21 @@ static bool fileExists(const std::string& path) {
     return true;
 }
 
+static bool readTextFile(const std::string& path, std::string& out) {
+    out.clear();
+    FILE* file = std::fopen(path.c_str(), "rb");
+    if (!file)
+        return false;
+
+    char buffer[1024];
+    std::size_t readBytes = 0;
+    while ((readBytes = std::fread(buffer, 1, sizeof(buffer), file)) > 0)
+        out.append(buffer, readBytes);
+
+    std::fclose(file);
+    return !out.empty();
+}
+
 static bool startsWith(const std::string& value, const char* prefix) {
     return value.rfind(prefix, 0) == 0;
 }
@@ -695,6 +710,19 @@ int Application::run(int argc, char* argv[]) {
         return appletMode ? "Xplore(Applet)" : "Xplore";
     };
 
+    auto localizedDocText = [&](const char* docName, const char* fallbackKey) {
+        std::string path = "romfs:/i18n/";
+        path += config::languageId(appConfig.language);
+        path += ".";
+        path += docName;
+        path += ".txt";
+
+        std::string content;
+        if (readTextFile(path, content))
+            return content;
+        return std::string(i18n.t(fallbackKey));
+    };
+
     auto startPathLoad = [&](ActivePanel panel, const std::string& targetPath) {
         if (pendingPanelLoad.active)
             return;
@@ -976,10 +1004,27 @@ int Application::run(int argc, char* argv[]) {
         int rx      = lw;
         renderer.clear(theme::BG);
         renderer.drawRectFilled(0, 0, theme::SCREEN_W, theme::HEADER_H, theme::HEADER_BG);
-        fontManager.drawText(renderer.sdl(), appTitle(), theme::PADDING,
-                             (theme::HEADER_H - theme::FONT_SIZE_TITLE) / 2,
-                             theme::FONT_SIZE_TITLE, theme::PRIMARY);
         HeaderIconLayout headerIcons = headerIconLayout();
+        const char* titleText = appTitle();
+        int titleX = theme::PADDING;
+        int titleTextH = fontManager.fontHeight(theme::FONT_SIZE_TITLE);
+        int titleY = (theme::HEADER_H - titleTextH) / 2;
+        fontManager.drawText(renderer.sdl(), titleText, titleX, titleY,
+                             theme::FONT_SIZE_TITLE, theme::PRIMARY);
+        if (!fs::ProviderManager::isVirtualRoot(activeRef().path)) {
+            constexpr int kTitleGap = 18;
+            constexpr int kIconGap = 18;
+            int pathX = titleX + fontManager.measureText(titleText, theme::FONT_SIZE_TITLE) +
+                        kTitleGap;
+            int pathMaxW = headerIcons.aboutHitX - kIconGap - pathX;
+            if (pathMaxW > 24) {
+                int pathTextH = fontManager.fontHeight(theme::FONT_SIZE_SMALL);
+                int pathY = (theme::HEADER_H - pathTextH) / 2;
+                fontManager.drawTextEllipsis(renderer.sdl(), activeRef().path.c_str(), pathX,
+                                             pathY, theme::FONT_SIZE_SMALL,
+                                             theme::TEXT_DISABLED, pathMaxW);
+            }
+        }
         if (SDL_Texture* aboutIcon = findIcon(icons, "about")) {
             renderer.drawTexture(aboutIcon, headerIcons.aboutIconX, headerIcons.iconY,
                                  headerIcons.iconSize, headerIcons.iconSize);
@@ -1421,7 +1466,9 @@ int Application::run(int argc, char* argv[]) {
                            tap.x < (headerIcons.aboutHitX + headerIcons.hitW) &&
                            tap.y >= headerIcons.hitY &&
                            tap.y < (headerIcons.hitY + headerIcons.hitH)) {
-                    modalInfo.open(i18n.t("menu.about"), i18n.t("help.about_body"));
+                    modalInfo.open(i18n.t("menu.about"),
+                                   localizedDocText("about", "help.about_body"),
+                                   theme::FONT_SIZE_ITEM);
                     consumed = true;
                 }
             }
@@ -1567,11 +1614,15 @@ int Application::run(int argc, char* argv[]) {
                 mainMenu.close();
                 break;
             case MenuCommand::Help:
-                modalInfo.open(i18n.t("menu.help"), i18n.t("help.short"));
+                modalInfo.open(i18n.t("menu.help"),
+                               localizedDocText("help", "help.short"),
+                               theme::FONT_SIZE_ITEM);
                 mainMenu.close();
                 break;
             case MenuCommand::About:
-                modalInfo.open(i18n.t("menu.about"), i18n.t("help.about_body"));
+                modalInfo.open(i18n.t("menu.about"),
+                               localizedDocText("about", "help.about_body"),
+                               theme::FONT_SIZE_ITEM);
                 mainMenu.close();
                 break;
             case MenuCommand::ViewClipboard: {

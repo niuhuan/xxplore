@@ -1,0 +1,12 @@
+Reglas de nombres de unidades:
+sdmc: significa la tarjeta SD
+ums*: significa un dispositivo de almacenamiento USB
+Nombre(WebDAV): significa una unidad WebDAV
+Nombre(SMB): significa una unidad Samba/SMB
+
+Cuando Xplore se ejecuta en modo aplicacion,
+puedes ver imagenes mas grandes
+y usar una cache de instalacion mayor.
+
+Si lo ejecutas en modo Applet del Album,
+estas capacidades quedan limitadas por la memoria.

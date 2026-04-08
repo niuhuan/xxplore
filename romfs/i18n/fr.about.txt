@@ -1,0 +1,8 @@
+Xplore
+
+Auteur : niuhuan
+
+Un gestionnaire de fichiers professionnel.
+Vous pouvez parcourir et gerer librement les fichiers sur
+carte SD / WebDav / Samba / peripheriques USB,
+et aussi installer NSP / XCI / NSZ / XCZ.

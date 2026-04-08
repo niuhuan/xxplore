@@ -1,0 +1,8 @@
+Xplore
+
+Autor: niuhuan
+
+Un administrador de archivos profesional.
+Puedes explorar y gestionar libremente archivos en
+tarjeta SD / WebDav / Samba / dispositivos USB,
+y tambien instalar NSP / XCI / NSZ / XCZ.

@@ -1,0 +1,8 @@
+Xplore
+
+Author: niuhuan
+
+A professional file manager.
+You can freely browse and manage files on
+SD card / WebDav / Samba / USB devices,
+and also install NSP / XCI / NSZ / XCZ.

@@ -24,6 +24,7 @@ PATTERNS = [
     "include/**/*.hpp",
     "include/**/*.h",
     "romfs/i18n/*.ini",
+    "romfs/i18n/*.txt",
 ]
 
 

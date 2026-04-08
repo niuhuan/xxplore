@@ -1,0 +1,8 @@
+Xplore
+
+作者: niuhuan
+
+プロ向けのファイル管理アプリです。
+SDカード / WebDav / Samba / USB機器内のファイルを
+自由に閲覧・管理でき、
+NSP / XCI / NSZ / XCZ のインストールにも対応します。

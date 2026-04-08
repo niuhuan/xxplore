@@ -218,16 +218,18 @@ void ModalProgress::render(Renderer& renderer, FontManager& fm, const I18n& i18n
 
 // ---- ModalInfo ----
 
-void ModalInfo::open(std::string t, std::string b) {
+void ModalInfo::open(std::string t, std::string b, int bodyFontSizePx) {
     active = true;
     title  = std::move(t);
     body   = std::move(b);
+    bodyFontSize = bodyFontSizePx > 0 ? bodyFontSizePx : theme::FONT_SIZE_SMALL;
 }
 
 void ModalInfo::close() {
     active = false;
     title.clear();
     body.clear();
+    bodyFontSize = theme::FONT_SIZE_SMALL;
 }
 
 ConfirmResult ModalInfo::handleInput(uint64_t kDown, const TouchTap* tap) {
@@ -260,12 +262,12 @@ void ModalInfo::render(Renderer& renderer, FontManager& fm) {
     int ty = cy + ui::kPanelTitleBarH + 12;
 
     const char* p = body.c_str();
-    int lineH = fm.fontHeight(FONT_SIZE_SMALL) + 4;
+    int lineH = fm.fontHeight(bodyFontSize) + 4;
     int maxY = cy + cardH - kPad;
     while (*p && ty < maxY) {
         const char* nl = strchr(p, '\n');
         std::string line(p, nl ? nl : p + strlen(p));
-        fm.drawTextEllipsis(renderer.sdl(), line.c_str(), tx, ty, FONT_SIZE_SMALL,
+        fm.drawTextEllipsis(renderer.sdl(), line.c_str(), tx, ty, bodyFontSize,
                             TEXT_SECONDARY, kCardW - kPad * 2);
         ty += lineH;
         if (!nl) break;

@@ -1,0 +1,8 @@
+Xplore
+
+작성자: niuhuan
+
+전문적인 파일 관리자입니다.
+SD 카드 / WebDav / Samba / USB 장치의 파일을
+자유롭게 탐색하고 관리할 수 있으며,
+NSP / XCI / NSZ / XCZ 도 설치할 수 있습니다.
