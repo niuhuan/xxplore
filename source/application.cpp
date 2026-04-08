@@ -43,9 +43,37 @@ enum { ACTION_NONE = 0, ACTION_ENTER, ACTION_GO_UP, ACTION_WEBSOCKET_INSTALLER,
        ACTION_ADD_NETWORK_DRIVE };
 enum ActivePanel { PANEL_LEFT, PANEL_RIGHT };
 
+enum class InputLayer {
+    BasePanels,
+    MainMenu,
+    ModalConfirm,
+    ModalChoice,
+    ModalProgress,
+    ModalInfo,
+    ModalInstallPrompt,
+    ImageViewer,
+    InstallerScreen,
+    SettingsScreen,
+    WebSocketInstallerScreen,
+    NetworkDriveForm,
+    LoadingOverlay,
+};
+
 struct IconEntry {
     const char*  name;
     SDL_Texture* tex;
+};
+
+struct HeaderIconLayout {
+    int aboutHitX = 0;
+    int menuHitX = 0;
+    int hitY = 0;
+    int hitW = 0;
+    int hitH = 0;
+    int aboutIconX = 0;
+    int menuIconX = 0;
+    int iconY = 0;
+    int iconSize = 0;
 };
 
 struct PanelState {
@@ -149,7 +177,7 @@ static std::vector<IconEntry> loadIcons(Renderer& renderer) {
     const char* names[] = {
         "folder", "file", "image", "video", "audio",
         "archive", "text", "code", "settings", "download", "back",
-        "network", "add", "sdcard", "usb"
+        "network", "add", "sdcard", "usb", "about", "menu"
     };
     std::vector<IconEntry> icons;
     for (auto n : names) {
@@ -165,6 +193,22 @@ static SDL_Texture* findIcon(const std::vector<IconEntry>& icons, const char* na
     for (auto& e : icons)
         if (strcmp(e.name, name) == 0) return e.tex;
     return nullptr;
+}
+
+static HeaderIconLayout headerIconLayout() {
+    HeaderIconLayout layout;
+    layout.iconSize = 24;
+    layout.hitW = 42;
+    layout.hitH = 36;
+    layout.hitY = (theme::HEADER_H - layout.hitH) / 2;
+    layout.iconY = (theme::HEADER_H - layout.iconSize) / 2;
+    constexpr int kEdgePadding = 8;
+    constexpr int kGap = 10;
+    layout.menuHitX = theme::SCREEN_W - kEdgePadding - layout.hitW;
+    layout.aboutHitX = layout.menuHitX - kGap - layout.hitW;
+    layout.menuIconX = layout.menuHitX + (layout.hitW - layout.iconSize) / 2;
+    layout.aboutIconX = layout.aboutHitX + (layout.hitW - layout.iconSize) / 2;
+    return layout;
 }
 
 static bool parseSmbAddress(const std::string& address, std::string& server,
@@ -833,6 +877,15 @@ int Application::run(int argc, char* argv[]) {
         fontManager.drawText(renderer.sdl(), appTitle(), theme::PADDING,
                              (theme::HEADER_H - theme::FONT_SIZE_TITLE) / 2,
                              theme::FONT_SIZE_TITLE, theme::PRIMARY);
+        HeaderIconLayout headerIcons = headerIconLayout();
+        if (SDL_Texture* aboutIcon = findIcon(icons, "about")) {
+            renderer.drawTexture(aboutIcon, headerIcons.aboutIconX, headerIcons.iconY,
+                                 headerIcons.iconSize, headerIcons.iconSize);
+        }
+        if (SDL_Texture* menuIcon = findIcon(icons, "menu")) {
+            renderer.drawTexture(menuIcon, headerIcons.menuIconX, headerIcons.iconY,
+                                 headerIcons.iconSize, headerIcons.iconSize);
+        }
         renderer.drawRectFilled(0, theme::HEADER_H - 1, theme::SCREEN_W, 1, theme::DIVIDER);
         renderer.setClipRect(0, panelY_, lw, panelH_);
         renderer.drawTexture(leftPanel.list.getCachedTexture(), 0, panelY_,
@@ -887,31 +940,48 @@ int Application::run(int argc, char* argv[]) {
 
         PanelState& active   = activeRef();
         FileList& activeList = active.list;
+        // Touch and gamepad share one dispatcher: only the top-most layer gets this frame's input.
+        InputLayer inputLayer = InputLayer::BasePanels;
+        if (pendingPanelLoad.active || loadingOverlay.isActive())
+            inputLayer = InputLayer::LoadingOverlay;
+        else if (networkDriveForm.isOpen())
+            inputLayer = InputLayer::NetworkDriveForm;
+        else if (webSocketInstallerScreen.isOpen())
+            inputLayer = InputLayer::WebSocketInstallerScreen;
+        else if (settingsScreen.isOpen())
+            inputLayer = InputLayer::SettingsScreen;
+        else if (installerScreen.isOpen())
+            inputLayer = InputLayer::InstallerScreen;
+        else if (imageViewer.isOpen())
+            inputLayer = InputLayer::ImageViewer;
+        else if (modalInstallPrompt.isOpen())
+            inputLayer = InputLayer::ModalInstallPrompt;
+        else if (modalInfo.isOpen())
+            inputLayer = InputLayer::ModalInfo;
+        else if (modalProgress.isOpen())
+            inputLayer = InputLayer::ModalProgress;
+        else if (modalChoice.isOpen())
+            inputLayer = InputLayer::ModalChoice;
+        else if (modalConfirm.isOpen())
+            inputLayer = InputLayer::ModalConfirm;
+        else if (mainMenu.isOpen())
+            inputLayer = InputLayer::MainMenu;
 
-        bool modalBlocking =
-            modalConfirm.isOpen() || modalChoice.isOpen() || modalProgress.isOpen() ||
-            modalInfo.isOpen() || modalInstallPrompt.isOpen() || imageViewer.isOpen() ||
-            installerScreen.isOpen() || settingsScreen.isOpen() ||
-            webSocketInstallerScreen.isOpen() || networkDriveForm.isOpen() ||
-            pendingPanelLoad.active || loadingOverlay.isVisible();
-        bool menuBlocking = mainMenu.isOpen();
+        bool updateMainMenu = false;
+        MainMenuState menuInputState;
+        if (inputLayer == InputLayer::MainMenu)
+            fillMenuState(menuInputState);
 
-        // Plus toggles menu
-        if (kDown & HidNpadButton_Plus) {
-            if (installerScreen.isOpen() || imageViewer.isOpen() ||
-                webSocketInstallerScreen.isOpen()) {
-                // Reserved for screen-specific handling below.
-            } else if (mainMenu.isOpen())
-                mainMenu.close();
-            else if (!modalBlocking)
-                mainMenu.open();
-        }
+        switch (inputLayer) {
+        case InputLayer::LoadingOverlay:
+        case InputLayer::ModalProgress:
+            break;
 
-        if (imageViewer.isOpen()) {
+        case InputLayer::ImageViewer:
             imageViewer.handleInput(kDown);
-        }
+            break;
 
-        if (settingsScreen.isOpen()) {
+        case InputLayer::SettingsScreen: {
             SettingsAction action = settingsScreen.handleInput(kDown, &tap);
             if (action == SettingsAction::Close) {
                 settingsScreen.close();
@@ -933,97 +1003,101 @@ int Application::run(int argc, char* argv[]) {
                     }
                 }
             }
+            break;
         }
 
-        if (webSocketInstallerScreen.isOpen()) {
+        case InputLayer::WebSocketInstallerScreen: {
             WebSocketInstallerAction action = webSocketInstallerScreen.handleInput(kDown);
             if (action == WebSocketInstallerAction::Close)
                 webSocketInstallerScreen.close();
+            break;
         }
 
-        if (networkDriveForm.isOpen()) {
+        case InputLayer::NetworkDriveForm: {
             NetworkDriveFormAction formAction = networkDriveForm.handleInput(kDown, i18n, &tap);
             if (formAction == NetworkDriveFormAction::Close) {
                 networkDriveForm.close();
             } else if (formAction == NetworkDriveFormAction::Save) {
                 const config::NetworkDriveConfig& cfg = networkDriveForm.result();
-                // Validate
                 if (cfg.name.empty()) {
                     toast.show(i18n.t("network_form.error_name_required"), "", ToastKind::Warning, 3000);
-                } else if (cfg.address.empty()) {
-                    toast.show(i18n.t("network_form.error_address_required"), "", ToastKind::Warning, 3000);
-                } else {
-                    std::shared_ptr<fs::FileProvider> prov;
-                    std::string providerErr;
-                    if (cfg.type == config::NetworkDriveType::WebDAV) {
-                        prov = std::make_shared<fs::WebDavProvider>(
-                            cfg.id, cfg.name, cfg.address, cfg.username, cfg.password);
-                    }
-                    else if (cfg.type == config::NetworkDriveType::SMB2) {
-                        std::string server;
-                        std::string share;
-                        if (!parseSmbAddress(cfg.address, server, share)) {
-                            providerErr = "SMB address must be server/share";
-                        } else {
-                            prov = std::make_shared<fs::SmbProvider>(
-                                cfg.id, cfg.name, server, share, cfg.username, cfg.password);
-                        }
-                    }
-
-                    if (!providerErr.empty()) {
-                        toast.show(i18n.t("error.operation_failed"), providerErr.c_str(),
-                                   ToastKind::Error, 3200);
-                        continue;
-                    }
-                    if (!prov) {
-                        toast.show(i18n.t("error.operation_failed"), "Failed to create provider",
-                                   ToastKind::Error, 3200);
-                        continue;
-                    }
-
-                    config::AppConfig nextConfig = appConfig;
-                    if (networkDriveForm.isEditing()) {
-                        bool updated = false;
-                        for (auto& d : nextConfig.networkDrives) {
-                            if (d.id == cfg.id) {
-                                d = cfg;
-                                updated = true;
-                                break;
-                            }
-                        }
-                        if (!updated)
-                            nextConfig.networkDrives.push_back(cfg);
-                    } else {
-                        nextConfig.networkDrives.push_back(cfg);
-                    }
-
-                    std::string saveErr;
-                    if (!config::saveConfig(configPath, nextConfig, saveErr)) {
-                        toast.show(i18n.t("error.operation_failed"), saveErr.c_str(),
-                                   ToastKind::Error, 3200);
-                        continue;
-                    }
-
-                    if (networkDriveForm.isEditing())
-                        provMgr.removeProvider(cfg.id);
-
-                    provMgr.registerProvider(prov);
-                    appConfig = std::move(nextConfig);
-
-                    // Refresh panels that show virtual root
-                    if (fs::ProviderManager::isVirtualRoot(leftPanel.path))
-                        reloadPanel(leftPanel, icons, i18n, leftPanel.list.getCursor(), provMgr);
-                    if (fs::ProviderManager::isVirtualRoot(rightPanel.path))
-                        reloadPanel(rightPanel, icons, i18n, rightPanel.list.getCursor(), provMgr);
-
-                    networkDriveForm.close();
-                    toast.show(i18n.t(networkDriveForm.isEditing() ? "toast.drive_updated" : "toast.drive_added"),
-                               "", ToastKind::Success, 2200);
+                    break;
                 }
+                if (cfg.address.empty()) {
+                    toast.show(i18n.t("network_form.error_address_required"), "", ToastKind::Warning, 3000);
+                    break;
+                }
+
+                std::shared_ptr<fs::FileProvider> prov;
+                std::string providerErr;
+                if (cfg.type == config::NetworkDriveType::WebDAV) {
+                    prov = std::make_shared<fs::WebDavProvider>(
+                        cfg.id, cfg.name, cfg.address, cfg.username, cfg.password);
+                } else if (cfg.type == config::NetworkDriveType::SMB2) {
+                    std::string server;
+                    std::string share;
+                    if (!parseSmbAddress(cfg.address, server, share)) {
+                        providerErr = "SMB address must be server/share";
+                    } else {
+                        prov = std::make_shared<fs::SmbProvider>(
+                            cfg.id, cfg.name, server, share, cfg.username, cfg.password);
+                    }
+                }
+
+                if (!providerErr.empty()) {
+                    toast.show(i18n.t("error.operation_failed"), providerErr.c_str(),
+                               ToastKind::Error, 3200);
+                    break;
+                }
+                if (!prov) {
+                    toast.show(i18n.t("error.operation_failed"), "Failed to create provider",
+                               ToastKind::Error, 3200);
+                    break;
+                }
+
+                bool editingDrive = networkDriveForm.isEditing();
+                config::AppConfig nextConfig = appConfig;
+                if (editingDrive) {
+                    bool updated = false;
+                    for (auto& d : nextConfig.networkDrives) {
+                        if (d.id == cfg.id) {
+                            d = cfg;
+                            updated = true;
+                            break;
+                        }
+                    }
+                    if (!updated)
+                        nextConfig.networkDrives.push_back(cfg);
+                } else {
+                    nextConfig.networkDrives.push_back(cfg);
+                }
+
+                std::string saveErr;
+                if (!config::saveConfig(configPath, nextConfig, saveErr)) {
+                    toast.show(i18n.t("error.operation_failed"), saveErr.c_str(),
+                               ToastKind::Error, 3200);
+                    break;
+                }
+
+                if (editingDrive)
+                    provMgr.removeProvider(cfg.id);
+
+                provMgr.registerProvider(prov);
+                appConfig = std::move(nextConfig);
+
+                if (fs::ProviderManager::isVirtualRoot(leftPanel.path))
+                    reloadPanel(leftPanel, icons, i18n, leftPanel.list.getCursor(), provMgr);
+                if (fs::ProviderManager::isVirtualRoot(rightPanel.path))
+                    reloadPanel(rightPanel, icons, i18n, rightPanel.list.getCursor(), provMgr);
+
+                networkDriveForm.close();
+                toast.show(i18n.t(editingDrive ? "toast.drive_updated" : "toast.drive_added"),
+                           "", ToastKind::Success, 2200);
             }
+            break;
         }
 
-        if (installerScreen.isOpen()) {
+        case InputLayer::InstallerScreen: {
             installerScreen.update();
             InstallerAction action = installerScreen.handleInput(kDown, &tap);
             if (action == InstallerAction::Close) {
@@ -1032,9 +1106,10 @@ int Application::run(int argc, char* argv[]) {
                 installerScreen.close();
                 pendingInstallItems.clear();
             }
+            break;
         }
 
-        if (modalConfirm.isOpen()) {
+        case InputLayer::ModalConfirm: {
             ConfirmResult cr = modalConfirm.handleInput(kDown, &tap);
             if (cr == ConfirmResult::Confirmed) {
                 if (pendingConfirm == PendingConfirm::DeleteItems) {
@@ -1119,9 +1194,10 @@ int Application::run(int argc, char* argv[]) {
                 pendingConfirm = PendingConfirm::None;
                 pendingDeletePaths.clear();
             }
+            break;
         }
 
-        if (modalChoice.isOpen()) {
+        case InputLayer::ModalChoice: {
             ChoiceResult ch = modalChoice.handleInput(kDown, &tap);
             if (ch != ChoiceResult::None) {
                 modalChoice.close();
@@ -1168,13 +1244,14 @@ int Application::run(int argc, char* argv[]) {
                         toast.show(i18n.t(isCut ? "toast.moved" : "toast.copied"), "", ToastKind::Success, 2200);
                 }
             }
+            break;
         }
 
-        if (modalInfo.isOpen()) {
+        case InputLayer::ModalInfo:
             if (modalInfo.handleInput(kDown, &tap) != ConfirmResult::None) modalInfo.close();
-        }
+            break;
 
-        if (modalInstallPrompt.isOpen()) {
+        case InputLayer::ModalInstallPrompt: {
             InstallPromptResult result = modalInstallPrompt.handleInput(kDown, &tap);
             if (result != InstallPromptResult::None) {
                 modalInstallPrompt.close();
@@ -1197,9 +1274,67 @@ int Application::run(int argc, char* argv[]) {
                     pendingInstallItems.clear();
                 }
             }
+            break;
         }
 
-        if (!modalBlocking && !menuBlocking) {
+        case InputLayer::MainMenu:
+            if (kDown & HidNpadButton_Plus) {
+                mainMenu.close();
+            } else {
+                updateMainMenu = true;
+            }
+            break;
+
+        case InputLayer::BasePanels: {
+            bool consumed = false;
+            if (tap.active && tap.y >= 0 && tap.y < theme::HEADER_H) {
+                HeaderIconLayout headerIcons = headerIconLayout();
+                if (tap.x >= headerIcons.menuHitX &&
+                    tap.x < (headerIcons.menuHitX + headerIcons.hitW) &&
+                    tap.y >= headerIcons.hitY &&
+                    tap.y < (headerIcons.hitY + headerIcons.hitH)) {
+                    mainMenu.open();
+                    consumed = true;
+                } else if (tap.x >= headerIcons.aboutHitX &&
+                           tap.x < (headerIcons.aboutHitX + headerIcons.hitW) &&
+                           tap.y >= headerIcons.hitY &&
+                           tap.y < (headerIcons.hitY + headerIcons.hitH)) {
+                    modalInfo.open(i18n.t("menu.about"), i18n.t("help.about_body"));
+                    consumed = true;
+                }
+            }
+
+            if (!consumed && tap.active && !anim.isAnimating()) {
+                int panelY = theme::HEADER_H;
+                int panelH = theme::PANEL_CONTENT_H;
+                float lwf = anim.currentLeftW();
+                int lw = static_cast<int>(lwf);
+                int rw = theme::SCREEN_W - lw;
+                int rx = lw;
+
+                if (tap.y >= panelY && tap.y < (panelY + panelH)) {
+                    if (activePanel == PANEL_LEFT && tap.x >= rx && tap.x < (rx + rw)) {
+                        activePanel = PANEL_RIGHT;
+                        anim.start(anim.currentLeftW(),
+                                   static_cast<float>(theme::INACTIVE_PANEL_W));
+                        consumed = true;
+                    } else if (activePanel == PANEL_RIGHT && tap.x >= 0 && tap.x < lw) {
+                        activePanel = PANEL_LEFT;
+                        anim.start(anim.currentLeftW(),
+                                   static_cast<float>(theme::ACTIVE_PANEL_W));
+                        consumed = true;
+                    }
+                }
+            }
+
+            if (consumed)
+                break;
+
+            if (kDown & HidNpadButton_Plus) {
+                mainMenu.open();
+                break;
+            }
+
             if (!anim.isAnimating()) {
                 if ((kDown & HidNpadButton_L) && activePanel != PANEL_LEFT) {
                     activePanel = PANEL_LEFT;
@@ -1269,13 +1404,17 @@ int Application::run(int argc, char* argv[]) {
 
             if (kDown & HidNpadButton_Y) activeList.toggleSelect();
             if (kDown & HidNpadButton_X) activeList.toggleSelectAll();
+            break;
+        }
         }
 
         MainMenuState menuSt;
         fillMenuState(menuSt);
 
+        if (updateMainMenu)
+            mainMenu.update(delta, kDown, menuInputState, &tap);
+
         if (mainMenu.isOpen()) {
-            mainMenu.update(delta, kDown, menuSt, &tap);
             MenuCommand cmd = mainMenu.takeCommand();
             switch (cmd) {
             case MenuCommand::CloseMenu: mainMenu.close(); break;

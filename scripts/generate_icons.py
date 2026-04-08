@@ -3,7 +3,7 @@ Generate Material-Design-style file-type icon PNGs (48x48, on transparent).
 Uses only Pillow drawing primitives — no external resources needed.
 Output: romfs/icons/*.png
 
-Icons: folder, file, image, video, audio, archive, text, code, settings, download, back, network, add, sdcard, usb
+Icons: folder, file, image, video, audio, archive, text, code, settings, download, back, network, add, sdcard, usb, about, menu
 """
 
 import os
@@ -200,6 +200,26 @@ def icon_usb():
     return img
 
 
+def icon_about():
+    img = new_img()
+    d = ImageDraw.Draw(img)
+    color = WHITE
+    d.ellipse([12, 8, 36, 32], outline=color, width=2)
+    d.line([(24, 18), (24, 27)], fill=color, width=3)
+    d.ellipse([22, 12, 26, 16], fill=color)
+    d.line([(18, 38), (30, 38)], fill=color, width=2)
+    return img
+
+
+def icon_menu():
+    img = new_img()
+    d = ImageDraw.Draw(img)
+    color = WHITE
+    for y in (14, 24, 34):
+        d.rounded_rectangle([12, y, 36, y + 4], radius=2, fill=color)
+    return img
+
+
 def main():
     os.makedirs(OUT_DIR, exist_ok=True)
 
@@ -219,6 +239,8 @@ def main():
         "add": icon_add,
         "sdcard": icon_sdcard,
         "usb": icon_usb,
+        "about": icon_about,
+        "menu": icon_menu,
     }
 
     for name, gen_fn in icons.items():
