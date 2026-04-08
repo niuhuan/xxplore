@@ -13,8 +13,14 @@ struct InstallBackendCallbacks {
     std::function<void(float currentProgress, float totalProgress)> onProgress;
 };
 
+struct InstallDataSourceCallbacks {
+    std::function<bool(const InstallQueueItem& item, uint64_t offset, size_t size,
+                       void* outBuffer, std::string& errOut)> readRange;
+};
+
 bool runInstallQueue(const std::vector<InstallQueueItem>& items, bool installToNand,
                      bool deleteAfterInstall, const InstallBackendCallbacks& callbacks,
-                     std::string& errOut);
+                     std::string& errOut,
+                     const InstallDataSourceCallbacks* sourceCallbacks = nullptr);
 
 } // namespace xplore

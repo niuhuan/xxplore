@@ -13,7 +13,7 @@
 #include "ui/settings_screen.hpp"
 #include "ui/theme.hpp"
 #include "ui/toast.hpp"
-#include "ui/web_install_demo_screen.hpp"
+#include "ui/websocket_installer_screen.hpp"
 #include "util/app_config.hpp"
 
 #include <cstdio>
@@ -27,7 +27,7 @@ namespace xplore {
 
 namespace {
 
-enum { ACTION_NONE = 0, ACTION_ENTER, ACTION_GO_UP, ACTION_WEB_INSTALL_DEMO };
+enum { ACTION_NONE = 0, ACTION_ENTER, ACTION_GO_UP, ACTION_WEBSOCKET_INSTALLER };
 enum ActivePanel { PANEL_LEFT, PANEL_RIGHT };
 
 struct IconEntry {
@@ -76,7 +76,7 @@ constexpr uint64_t kNormalImageDecodeLimit = 96ULL * 1024ULL * 1024ULL;
 static std::vector<IconEntry> loadIcons(Renderer& renderer) {
     const char* names[] = {
         "folder", "file", "image", "video", "audio",
-        "archive", "text", "code", "settings", "back"
+        "archive", "text", "code", "settings", "download", "back"
     };
     std::vector<IconEntry> icons;
     for (auto n : names) {
@@ -95,16 +95,16 @@ static SDL_Texture* findIcon(const std::vector<IconEntry>& icons, const char* na
 }
 
 static std::vector<ListItem> buildItemsForPath(const std::string& path,
-                                               const std::vector<IconEntry>& icons) {
+                                               const std::vector<IconEntry>& icons,
+                                               const I18n& i18n) {
     std::vector<ListItem> items;
 
     if (fs::isVirtualRoot(path)) {
         auto roots = fs::getRootEntries();
         for (auto& r : roots)
             items.push_back({r.name, findIcon(icons, "folder"), ACTION_ENTER});
-#ifdef XPLORE_DEBUG
-        items.push_back({u8"启动安装服务器", findIcon(icons, "settings"), ACTION_WEB_INSTALL_DEMO});
-#endif
+        items.push_back({i18n.t("root.websocket_installer"), findIcon(icons, "download"),
+                         ACTION_WEBSOCKET_INSTALLER});
         return items;
     }
 
@@ -118,17 +118,19 @@ static std::vector<ListItem> buildItemsForPath(const std::string& path,
 }
 
 static void navigatePanel(PanelState& panel, const std::string& newPath,
-                          const std::vector<IconEntry>& icons) {
+                          const std::vector<IconEntry>& icons, const I18n& i18n) {
     panel.path = newPath;
     bool hasGoUp = !fs::isVirtualRoot(newPath);
     bool allowSel = fs::pathAllowsSelection(newPath);
-    panel.list.setItems(buildItemsForPath(newPath, icons), hasGoUp, allowSel);
+    panel.list.setItems(buildItemsForPath(newPath, icons, i18n), hasGoUp, allowSel);
 }
 
-static void reloadPanel(PanelState& panel, const std::vector<IconEntry>& icons, int preserveCursor) {
+static void reloadPanel(PanelState& panel, const std::vector<IconEntry>& icons,
+                        const I18n& i18n, int preserveCursor) {
     bool hasGoUp = !fs::isVirtualRoot(panel.path);
     bool allowSel = fs::pathAllowsSelection(panel.path);
-    panel.list.reloadItems(buildItemsForPath(panel.path, icons), hasGoUp, allowSel, preserveCursor);
+    panel.list.reloadItems(buildItemsForPath(panel.path, icons, i18n), hasGoUp, allowSel,
+                           preserveCursor);
 }
 
 static void renderFooter(Renderer& renderer, FontManager& fontManager, const I18n& i18n) {
@@ -159,7 +161,8 @@ static void renderFooter(Renderer& renderer, FontManager& fontManager, const I18
         totalWithS = totalW + spacing * (n - 1);
     }
     int x = (SCREEN_W - totalWithS) / 2;
-    int y = footerY + (FOOTER_H - FONT_SIZE_FOOTER) / 2 + 1;
+    int footerTextH = fontManager.fontHeight(FONT_SIZE_FOOTER);
+    int y = footerY + (FOOTER_H - footerTextH) / 2 - 1;
     for (int i = 0; i < n; i++) {
         fontManager.drawText(renderer.sdl(), tips[i].button, x, y, FONT_SIZE_FOOTER, PRIMARY);
         x += fontManager.measureText(tips[i].button, FONT_SIZE_FOOTER);
@@ -220,12 +223,12 @@ int Application::run(int argc, char* argv[]) {
     ImageViewer imageViewer;
     InstallerScreen installerScreen;
     SettingsScreen settingsScreen;
-    WebInstallDemoScreen webInstallDemoScreen;
+    WebSocketInstallerScreen webSocketInstallerScreen;
 
     PanelState leftPanel;
     PanelState rightPanel;
-    navigatePanel(leftPanel, "/", icons);
-    navigatePanel(rightPanel, "/", icons);
+    navigatePanel(leftPanel, "/", icons, i18n);
+    navigatePanel(rightPanel, "/", icons, i18n);
 
     ActivePanel activePanel = PANEL_LEFT;
     PanelAnim anim;
@@ -250,11 +253,11 @@ int Application::run(int argc, char* argv[]) {
     auto refreshPath = [&](const std::string& dir, int keepCursor) {
         if (leftPanel.path == dir) {
             leftPanel.list.clearSelection();
-            reloadPanel(leftPanel, icons, keepCursor);
+            reloadPanel(leftPanel, icons, i18n, keepCursor);
         }
         if (rightPanel.path == dir) {
             rightPanel.list.clearSelection();
-            reloadPanel(rightPanel, icons, keepCursor);
+            reloadPanel(rightPanel, icons, i18n, keepCursor);
         }
     };
 
@@ -271,17 +274,17 @@ int Application::run(int argc, char* argv[]) {
         if (refreshLeft) {
             int keepCursor = leftPanel.list.getCursor();
             leftPanel.list.clearSelection();
-            reloadPanel(leftPanel, icons, keepCursor);
+            reloadPanel(leftPanel, icons, i18n, keepCursor);
         }
         if (refreshRight) {
             int keepCursor = rightPanel.list.getCursor();
             rightPanel.list.clearSelection();
-            reloadPanel(rightPanel, icons, keepCursor);
+            reloadPanel(rightPanel, icons, i18n, keepCursor);
         }
     };
 
     auto appTitle = [&]() -> const char* {
-        return appletMode ? "Xxplre(Applet)" : "Xplore";
+        return appletMode ? "Xplore(Applet)" : "Xplore";
     };
 
     auto buildInstallItems = [&](PanelState& panel, bool useSelection) {
@@ -518,12 +521,12 @@ int Application::run(int argc, char* argv[]) {
         bool modalBlocking =
             modalConfirm.isOpen() || modalChoice.isOpen() || modalProgress.isOpen() ||
             modalInfo.isOpen() || modalInstallPrompt.isOpen() || imageViewer.isOpen() ||
-            installerScreen.isOpen() || settingsScreen.isOpen() || webInstallDemoScreen.isOpen();
+            installerScreen.isOpen() || settingsScreen.isOpen() || webSocketInstallerScreen.isOpen();
         bool menuBlocking = mainMenu.isOpen();
 
         // Plus toggles menu
         if (kDown & HidNpadButton_Plus) {
-            if (installerScreen.isOpen() || imageViewer.isOpen() || webInstallDemoScreen.isOpen()) {
+            if (installerScreen.isOpen() || imageViewer.isOpen() || webSocketInstallerScreen.isOpen()) {
                 // Reserved for screen-specific handling below.
             } else if (mainMenu.isOpen())
                 mainMenu.close();
@@ -551,16 +554,18 @@ int Application::run(int argc, char* argv[]) {
                         toast.show(i18n.t("error.operation_failed"), "load language failed",
                                    ToastKind::Error, 3200);
                     } else {
+                        reloadPanel(leftPanel, icons, i18n, leftPanel.list.getCursor());
+                        reloadPanel(rightPanel, icons, i18n, rightPanel.list.getCursor());
                         settingsScreen.close();
                     }
                 }
             }
         }
 
-        if (webInstallDemoScreen.isOpen()) {
-            WebInstallDemoAction action = webInstallDemoScreen.handleInput(kDown);
-            if (action == WebInstallDemoAction::Close)
-                webInstallDemoScreen.close();
+        if (webSocketInstallerScreen.isOpen()) {
+            WebSocketInstallerAction action = webSocketInstallerScreen.handleInput(kDown);
+            if (action == WebSocketInstallerAction::Close)
+                webSocketInstallerScreen.close();
         }
 
         if (installerScreen.isOpen()) {
@@ -715,13 +720,13 @@ int Application::run(int argc, char* argv[]) {
                                 target = item->label + "/";
                             else
                                 target = fs::joinPath(active.path, item->label);
-                            navigatePanel(active, target, icons);
+                            navigatePanel(active, target, icons, i18n);
                         }
                     } else if (item->action == ACTION_GO_UP) {
-                        navigatePanel(active, fs::parentPath(active.path), icons);
-                    } else if (item->action == ACTION_WEB_INSTALL_DEMO) {
+                        navigatePanel(active, fs::parentPath(active.path), icons, i18n);
+                    } else if (item->action == ACTION_WEBSOCKET_INSTALLER) {
                         activeList.clearSelection();
-                        webInstallDemoScreen.open();
+                        webSocketInstallerScreen.open(i18n);
                     } else {
                         bool hasSelection    = activeList.hasSelection();
                         bool currentSelected = hasSelection && activeList.isSelected(activeList.getCursor());
@@ -742,7 +747,7 @@ int Application::run(int argc, char* argv[]) {
 
             if (kDown & HidNpadButton_B) {
                 if (!fs::isVirtualRoot(active.path))
-                    navigatePanel(active, fs::parentPath(active.path), icons);
+                    navigatePanel(active, fs::parentPath(active.path), icons, i18n);
             }
 
             if (kDown & HidNpadButton_Y) activeList.toggleSelect();
@@ -1002,12 +1007,12 @@ int Application::run(int argc, char* argv[]) {
             mainMenu.isOpen() || modalConfirm.isOpen() || modalChoice.isOpen()
             || modalProgress.isOpen() || modalInfo.isOpen() || modalInstallPrompt.isOpen();
         if (anyOverlay && !imageViewer.isOpen() && !installerScreen.isOpen()
-            && !settingsScreen.isOpen() && !webInstallDemoScreen.isOpen()) {
+            && !settingsScreen.isOpen() && !webSocketInstallerScreen.isOpen()) {
             int scrimH = theme::HEADER_H + theme::PANEL_CONTENT_H;
             renderer.drawRectFilled(0, 0, theme::SCREEN_W, scrimH, theme::MENU_SCRIM_CONTENT);
         }
         if (!imageViewer.isOpen() && !installerScreen.isOpen()
-            && !settingsScreen.isOpen() && !webInstallDemoScreen.isOpen())
+            && !settingsScreen.isOpen() && !webSocketInstallerScreen.isOpen())
             renderFooter(renderer, fontManager, i18n);
 
         if (mainMenu.isOpen()) mainMenu.render(renderer, fontManager, i18n, menuSt);
@@ -1019,7 +1024,7 @@ int Application::run(int argc, char* argv[]) {
         imageViewer.render(renderer);
         installerScreen.render(renderer, fontManager, i18n);
         settingsScreen.render(renderer, fontManager, i18n);
-        webInstallDemoScreen.render(renderer, fontManager);
+        webSocketInstallerScreen.render(renderer, fontManager, i18n);
 
         toast.render(renderer, fontManager);
         renderer.present();
@@ -1029,7 +1034,7 @@ int Application::run(int argc, char* argv[]) {
 
     leftPanel.list.destroyCache();
     rightPanel.list.destroyCache();
-    webInstallDemoScreen.close();
+    webSocketInstallerScreen.close();
     for (auto& e : icons)
         if (e.tex) SDL_DestroyTexture(e.tex);
     fontManager.shutdown();

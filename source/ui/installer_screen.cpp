@@ -21,6 +21,10 @@ void drawProgressBar(Renderer& renderer, int x, int y, int w, int h, float progr
 
     renderer.drawRoundedRectFilled(x, y, w, h, 8, theme::SURFACE);
     int fillW = static_cast<int>(static_cast<float>(w) * progress);
+    if (progress > 0.0f && fillW <= 0)
+        fillW = 1;
+    if (fillW > w)
+        fillW = w;
     if (fillW > 0)
         renderer.drawRoundedRectFilled(x, y, fillW, h, 8, theme::PRIMARY);
     renderer.drawRoundedRect(x, y, w, h, 8, theme::DIVIDER);

@@ -1213,6 +1213,10 @@ NcmPlaceHolderId contentIdToPlaceholderId(const NcmContentId& contentId) {
     return placeholderId;
 }
 
+bool isRemotePath(const std::string& path) {
+    return path.rfind("web:", 0) == 0;
+}
+
 void emitLog(const InstallBackendCallbacks& callbacks, const std::string& line) {
 #ifdef XPLORE_DEBUG
     std::printf("[install-log] %s\n", line.c_str());
@@ -1458,6 +1462,104 @@ private:
     FILE* file = nullptr;
 };
 
+class RemoteNSP final : public install::nsp::NSP {
+public:
+    RemoteNSP(InstallQueueItem item, const InstallDataSourceCallbacks* sourceCallbacks)
+        : item_(std::move(item)), sourceCallbacks_(sourceCallbacks) {}
+
+    void StreamToPlaceholder(std::shared_ptr<nxncm::ContentStorage>& contentStorage,
+                             const NcmPlaceHolderId& placeholderId,
+                             const NcmContentId& ncaId) override {
+        const PFS0FileEntry* fileEntry = GetFileEntryByNcaId(ncaId);
+        if (!fileEntry)
+            XP_THROW("NCA entry not found in remote NSP");
+        std::string ncaFileName = GetFileEntryName(fileEntry);
+        size_t ncaSize = fileEntry->fileSize;
+        debugPrint("install", "stream remote nsp entry=%s size=%llu", ncaFileName.c_str(),
+                   static_cast<unsigned long long>(ncaSize));
+
+        NcaWriter writer(ncaId, placeholderId, contentStorage);
+        u64 fileStart = GetDataOffset() + fileEntry->dataOffset;
+        u64 fileOff = 0;
+        size_t readSize = 0x100000;
+        auto buffer = std::make_unique<u8[]>(readSize);
+
+        beginContainerEntry(ncaFileName, ncaSize);
+        while (fileOff < ncaSize) {
+            size_t chunk = readSize;
+            if (fileOff + chunk >= ncaSize)
+                chunk = static_cast<size_t>(ncaSize - fileOff);
+            BufferData(buffer.get(), fileStart + fileOff, chunk);
+            writer.write(buffer.get(), chunk);
+            fileOff += chunk;
+            updateContainerEntry(fileOff, ncaSize);
+        }
+        writer.close();
+        finishContainerEntry(ncaSize);
+    }
+
+    void BufferData(void* buf, off_t offset, size_t size) override {
+        if (!sourceCallbacks_ || !sourceCallbacks_->readRange)
+            XP_THROW("Remote install data source unavailable");
+        std::string err;
+        if (!sourceCallbacks_->readRange(item_, static_cast<uint64_t>(offset), size, buf, err))
+            XP_THROW(err.empty() ? "Remote read failed" : err);
+    }
+
+private:
+    InstallQueueItem item_;
+    const InstallDataSourceCallbacks* sourceCallbacks_ = nullptr;
+};
+
+class RemoteXCI final : public install::xci::XCI {
+public:
+    RemoteXCI(InstallQueueItem item, const InstallDataSourceCallbacks* sourceCallbacks)
+        : item_(std::move(item)), sourceCallbacks_(sourceCallbacks) {}
+
+    void StreamToPlaceholder(std::shared_ptr<nxncm::ContentStorage>& contentStorage,
+                             const NcmPlaceHolderId& placeholderId,
+                             const NcmContentId& ncaId) override {
+        const HFS0FileEntry* fileEntry = GetFileEntryByNcaId(ncaId);
+        if (!fileEntry)
+            XP_THROW("NCA entry not found in remote XCI");
+        std::string ncaFileName = GetFileEntryName(fileEntry);
+        size_t ncaSize = fileEntry->fileSize;
+        debugPrint("install", "stream remote xci entry=%s size=%llu", ncaFileName.c_str(),
+                   static_cast<unsigned long long>(ncaSize));
+
+        NcaWriter writer(ncaId, placeholderId, contentStorage);
+        u64 fileStart = GetDataOffset() + fileEntry->dataOffset;
+        u64 fileOff = 0;
+        size_t readSize = 0x100000;
+        auto buffer = std::make_unique<u8[]>(readSize);
+
+        beginContainerEntry(ncaFileName, ncaSize);
+        while (fileOff < ncaSize) {
+            size_t chunk = readSize;
+            if (fileOff + chunk >= ncaSize)
+                chunk = static_cast<size_t>(ncaSize - fileOff);
+            BufferData(buffer.get(), fileStart + fileOff, chunk);
+            writer.write(buffer.get(), chunk);
+            fileOff += chunk;
+            updateContainerEntry(fileOff, ncaSize);
+        }
+        writer.close();
+        finishContainerEntry(ncaSize);
+    }
+
+    void BufferData(void* buf, off_t offset, size_t size) override {
+        if (!sourceCallbacks_ || !sourceCallbacks_->readRange)
+            XP_THROW("Remote install data source unavailable");
+        std::string err;
+        if (!sourceCallbacks_->readRange(item_, static_cast<uint64_t>(offset), size, buf, err))
+            XP_THROW(err.empty() ? "Remote read failed" : err);
+    }
+
+private:
+    InstallQueueItem item_;
+    const InstallDataSourceCallbacks* sourceCallbacks_ = nullptr;
+};
+
 class NSPInstallTask final : public InstallTask {
 public:
     NSPInstallTask(NcmStorageId storageId, std::shared_ptr<install::nsp::NSP> nsp)
@@ -1503,10 +1605,10 @@ protected:
 
         NcmPlaceHolderId placeholderId = storage->GeneratePlaceholderId();
         debugPrint("install", "generated placeholder for %s", util::GetNcaIdString(ncaId).c_str());
-        package->StreamToPlaceholder(storage, placeholderId, ncaId);
-        debugPrint("install", "placeholder exists before register=%d",
-                   storage->HasPlaceholder(placeholderId) ? 1 : 0);
         try {
+            package->StreamToPlaceholder(storage, placeholderId, ncaId);
+            debugPrint("install", "placeholder exists before register=%d",
+                       storage->HasPlaceholder(placeholderId) ? 1 : 0);
             storage->Register(placeholderId, ncaId);
         } catch (...) {
             debugPrint("install", "register failed content=%s placeholder_exists=%d",
@@ -1516,6 +1618,11 @@ protected:
                 if (gStreamProgress.callbacks && storage->Has(ncaId))
                     emitLog(*gStreamProgress.callbacks, "Content already present: " + util::GetNcaIdString(ncaId));
             } catch (...) {}
+            try {
+                if (storage->HasPlaceholder(placeholderId))
+                    storage->DeletePlaceholder(placeholderId);
+            } catch (...) {}
+            throw;
         }
         try { storage->DeletePlaceholder(placeholderId); } catch (...) {}
     }
@@ -1587,10 +1694,10 @@ protected:
 
         NcmPlaceHolderId placeholderId = storage->GeneratePlaceholderId();
         debugPrint("install", "generated placeholder for %s", util::GetNcaIdString(ncaId).c_str());
-        package->StreamToPlaceholder(storage, placeholderId, ncaId);
-        debugPrint("install", "placeholder exists before register=%d",
-                   storage->HasPlaceholder(placeholderId) ? 1 : 0);
         try {
+            package->StreamToPlaceholder(storage, placeholderId, ncaId);
+            debugPrint("install", "placeholder exists before register=%d",
+                       storage->HasPlaceholder(placeholderId) ? 1 : 0);
             storage->Register(placeholderId, ncaId);
         } catch (...) {
             debugPrint("install", "register failed content=%s placeholder_exists=%d",
@@ -1600,6 +1707,11 @@ protected:
                 if (gStreamProgress.callbacks && storage->Has(ncaId))
                     emitLog(*gStreamProgress.callbacks, "Content already present: " + util::GetNcaIdString(ncaId));
             } catch (...) {}
+            try {
+                if (storage->HasPlaceholder(placeholderId))
+                    storage->DeletePlaceholder(placeholderId);
+            } catch (...) {}
+            throw;
         }
         try { storage->DeletePlaceholder(placeholderId); } catch (...) {}
     }
@@ -1657,7 +1769,7 @@ uint64_t sumWorkBytes(const install::xci::XCI& package) {
 
 bool runInstallQueue(const std::vector<InstallQueueItem>& items, bool installToNand,
                      bool deleteAfterInstall, const InstallBackendCallbacks& callbacks,
-                     std::string& errOut) {
+                     std::string& errOut, const InstallDataSourceCallbacks* sourceCallbacks) {
     if (items.empty()) {
         errOut = "No install items";
         return false;
@@ -1670,12 +1782,26 @@ bool runInstallQueue(const std::vector<InstallQueueItem>& items, bool installToN
         debugPrint("install", "queue start items=%zu target=%s delete_after=%d", items.size(),
                    installToNand ? "nand" : "sd", deleteAfterInstall ? 1 : 0);
         for (size_t i = 0; i < items.size(); i++) {
+            const bool remote = isRemotePath(items[i].path);
+            if (remote && (!sourceCallbacks || !sourceCallbacks->readRange))
+                XP_THROW("Remote install requested without data source");
+
             if (isXciPath(items[i].path)) {
-                auto package = std::make_shared<SDMCXCI>(items[i].path);
+                std::shared_ptr<install::xci::XCI> package =
+                    remote
+                        ? std::static_pointer_cast<install::xci::XCI>(
+                              std::make_shared<RemoteXCI>(items[i], sourceCallbacks))
+                        : std::static_pointer_cast<install::xci::XCI>(
+                              std::make_shared<SDMCXCI>(items[i].path));
                 package->RetrieveHeader();
                 perPackageWork[i] = sumWorkBytes(*package);
             } else {
-                auto package = std::make_shared<SDMCNSP>(items[i].path);
+                std::shared_ptr<install::nsp::NSP> package =
+                    remote
+                        ? std::static_pointer_cast<install::nsp::NSP>(
+                              std::make_shared<RemoteNSP>(items[i], sourceCallbacks))
+                        : std::static_pointer_cast<install::nsp::NSP>(
+                              std::make_shared<SDMCNSP>(items[i].path));
                 package->RetrieveHeader();
                 perPackageWork[i] = sumWorkBytes(*package);
             }
@@ -1709,13 +1835,24 @@ bool runInstallQueue(const std::vector<InstallQueueItem>& items, bool installToN
             gStreamProgress.totalBytes = totalWorkBytes == 0 ? 1 : totalWorkBytes;
             emitProgress(gStreamProgress, 0, 1);
 
+            const bool remote = isRemotePath(items[i].path);
             if (isXciPath(items[i].path)) {
-                auto package = std::make_shared<SDMCXCI>(items[i].path);
+                std::shared_ptr<install::xci::XCI> package =
+                    remote
+                        ? std::static_pointer_cast<install::xci::XCI>(
+                              std::make_shared<RemoteXCI>(items[i], sourceCallbacks))
+                        : std::static_pointer_cast<install::xci::XCI>(
+                              std::make_shared<SDMCXCI>(items[i].path));
                 XCIInstallTask task(storageId, package);
                 task.Prepare();
                 task.Begin();
             } else {
-                auto package = std::make_shared<SDMCNSP>(items[i].path);
+                std::shared_ptr<install::nsp::NSP> package =
+                    remote
+                        ? std::static_pointer_cast<install::nsp::NSP>(
+                              std::make_shared<RemoteNSP>(items[i], sourceCallbacks))
+                        : std::static_pointer_cast<install::nsp::NSP>(
+                              std::make_shared<SDMCNSP>(items[i].path));
                 NSPInstallTask task(storageId, package);
                 task.Prepare();
                 task.Begin();
@@ -1728,6 +1865,8 @@ bool runInstallQueue(const std::vector<InstallQueueItem>& items, bool installToN
             debugPrint("install", "package done name=%s", items[i].name.c_str());
 
             if (deleteAfterInstall) {
+                if (remote)
+                    continue;
                 std::error_code ec;
                 std::filesystem::remove(items[i].path, ec);
                 if (ec)

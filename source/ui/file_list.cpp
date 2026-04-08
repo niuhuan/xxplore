@@ -183,9 +183,10 @@ void FileList::updateCache(Renderer& renderer, FontManager& fontManager,
         }
 
         // Label
+        int textH = fontManager.fontHeight(theme::FONT_SIZE_ITEM);
         fontManager.drawText(renderer.sdl(), items[i].label.c_str(),
             textX,
-            iy + (theme::ITEM_H - theme::FONT_SIZE_ITEM) / 2,
+            iy + (theme::ITEM_H - textH) / 2,
             theme::FONT_SIZE_ITEM, theme::TEXT);
 
         // Divider
