@@ -2,6 +2,7 @@
 #include "ui/touch_event.hpp"
 #include <SDL.h>
 #include <string>
+#include <vector>
 
 namespace xplore {
 
@@ -78,6 +79,8 @@ private:
     std::string title;
     std::string body;
     int         bodyFontSize = 0;
+    std::vector<std::string> lines;
+    int         pageIndex = 0;
 };
 
 /// Three-button install prompt: Cancel / Install / Install+Delete.

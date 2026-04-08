@@ -4,6 +4,8 @@
 #include "ui/panel_chrome.hpp"
 #include "ui/theme.hpp"
 #include "i18n/i18n.hpp"
+#include <cstdio>
+#include <cstring>
 #include <switch.h>
 
 namespace xplore {
@@ -11,6 +13,7 @@ namespace xplore {
 static constexpr int kCardW = 560;
 static constexpr int kCardH = 220;
 static constexpr int kPad   = 20;
+static constexpr int kInfoLinesPerPage = 8;
 
 // ---- ModalConfirm (OK / Cancel) ----
 
@@ -223,6 +226,17 @@ void ModalInfo::open(std::string t, std::string b, int bodyFontSizePx) {
     title  = std::move(t);
     body   = std::move(b);
     bodyFontSize = bodyFontSizePx > 0 ? bodyFontSizePx : theme::FONT_SIZE_SMALL;
+    lines.clear();
+    pageIndex = 0;
+
+    const char* p = body.c_str();
+    while (true) {
+        const char* nl = std::strchr(p, '\n');
+        lines.emplace_back(p, nl ? nl : p + std::strlen(p));
+        if (!nl)
+            break;
+        p = nl + 1;
+    }
 }
 
 void ModalInfo::close() {
@@ -230,6 +244,8 @@ void ModalInfo::close() {
     title.clear();
     body.clear();
     bodyFontSize = theme::FONT_SIZE_SMALL;
+    lines.clear();
+    pageIndex = 0;
 }
 
 ConfirmResult ModalInfo::handleInput(uint64_t kDown, const TouchTap* tap) {
@@ -237,9 +253,37 @@ ConfirmResult ModalInfo::handleInput(uint64_t kDown, const TouchTap* tap) {
     int cardH = 420;
     int cx    = (theme::SCREEN_W - kCardW) / 2;
     int cy    = (theme::SCREEN_H - cardH) / 2;
+    int pagerH = 36;
+    int pageCount = static_cast<int>((lines.size() + kInfoLinesPerPage - 1) / kInfoLinesPerPage);
+    if (pageCount < 1)
+        pageCount = 1;
+    if (pageIndex >= pageCount)
+        pageIndex = pageCount - 1;
+
+    int pagerY = cy + cardH - kPad - pagerH;
+    int navW = 56;
     if (tap && tap->active &&
         ui::panelCloseButtonHit(cx, cy, kCardW, tap->x, tap->y))
         return ConfirmResult::Confirmed;
+    if (tap && tap->active && pageCount > 1) {
+        if (pointInRect(tap, cx + kPad, pagerY, navW, pagerH) && pageIndex > 0) {
+            pageIndex--;
+            return ConfirmResult::None;
+        }
+        if (pointInRect(tap, cx + kCardW - kPad - navW, pagerY, navW, pagerH) &&
+            pageIndex + 1 < pageCount) {
+            pageIndex++;
+            return ConfirmResult::None;
+        }
+    }
+    if ((kDown & (HidNpadButton_AnyLeft | HidNpadButton_L)) && pageIndex > 0) {
+        pageIndex--;
+        return ConfirmResult::None;
+    }
+    if ((kDown & (HidNpadButton_AnyRight | HidNpadButton_R)) && pageIndex + 1 < pageCount) {
+        pageIndex++;
+        return ConfirmResult::None;
+    }
     if (kDown & (HidNpadButton_A | HidNpadButton_B))
         return ConfirmResult::Confirmed;
     return ConfirmResult::None;
@@ -260,18 +304,44 @@ void ModalInfo::render(Renderer& renderer, FontManager& fm) {
 
     int tx = cx + kPad;
     int ty = cy + ui::kPanelTitleBarH + 12;
-
-    const char* p = body.c_str();
     int lineH = fm.fontHeight(bodyFontSize) + 4;
-    int maxY = cy + cardH - kPad;
-    while (*p && ty < maxY) {
-        const char* nl = strchr(p, '\n');
-        std::string line(p, nl ? nl : p + strlen(p));
-        fm.drawTextEllipsis(renderer.sdl(), line.c_str(), tx, ty, bodyFontSize,
+    int pagerH = 36;
+    int pageCount = static_cast<int>((lines.size() + kInfoLinesPerPage - 1) / kInfoLinesPerPage);
+    if (pageCount < 1)
+        pageCount = 1;
+    int startLine = pageIndex * kInfoLinesPerPage;
+    int endLine = startLine + kInfoLinesPerPage;
+    if (endLine > static_cast<int>(lines.size()))
+        endLine = static_cast<int>(lines.size());
+    for (int i = startLine; i < endLine; ++i) {
+        fm.drawTextEllipsis(renderer.sdl(), lines[i].c_str(), tx, ty, bodyFontSize,
                             TEXT_SECONDARY, kCardW - kPad * 2);
         ty += lineH;
-        if (!nl) break;
-        p = nl + 1;
+    }
+
+    if (pageCount > 1) {
+        int pagerY = cy + cardH - kPad - pagerH;
+        int navW = 56;
+        renderer.drawRoundedRectFilled(cx + kPad, pagerY, navW, pagerH, 8, SURFACE);
+        renderer.drawRoundedRect(cx + kPad, pagerY, navW, pagerH, 8,
+                                 pageIndex > 0 ? PRIMARY_DIM : DIVIDER);
+        renderer.drawRoundedRectFilled(cx + kCardW - kPad - navW, pagerY, navW, pagerH, 8,
+                                       SURFACE);
+        renderer.drawRoundedRect(cx + kCardW - kPad - navW, pagerY, navW, pagerH, 8,
+                                 pageIndex + 1 < pageCount ? PRIMARY_DIM : DIVIDER);
+        SDL_Color prevCol = pageIndex > 0 ? PRIMARY : TEXT_DISABLED;
+        SDL_Color nextCol = (pageIndex + 1 < pageCount) ? PRIMARY : TEXT_DISABLED;
+        fm.drawText(renderer.sdl(), "<", cx + kPad + 20, pagerY + 8, FONT_SIZE_ITEM, prevCol);
+        fm.drawText(renderer.sdl(), ">", cx + kCardW - kPad - navW + 20, pagerY + 8,
+                    FONT_SIZE_ITEM, nextCol);
+
+        char pageBuf[32];
+        std::snprintf(pageBuf, sizeof(pageBuf), "%d/%d", pageIndex + 1, pageCount);
+        int pageW = fm.measureText(pageBuf, FONT_SIZE_SMALL);
+        int pageX = cx + (kCardW - pageW) / 2;
+        int pageTextH = fm.fontHeight(FONT_SIZE_SMALL);
+        int pageTextY = pagerY + (pagerH - pageTextH) / 2;
+        fm.drawText(renderer.sdl(), pageBuf, pageX, pageTextY, FONT_SIZE_SMALL, TEXT_DISABLED);
     }
 }
 
