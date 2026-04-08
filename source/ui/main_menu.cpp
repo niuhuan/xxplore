@@ -33,10 +33,12 @@ MenuCommand BottomMainMenu::takeCommand() {
     return c;
 }
 
-MenuCommand BottomMainMenu::cmdAt(int row, int col) const {
+MenuCommand BottomMainMenu::cmdAt(int row, int col, const MainMenuState& st) const {
     if (row == 2) {
-        const MenuCommand m[] = {MenuCommand::ToggleSelectMode, MenuCommand::Rename,
-                                 MenuCommand::NewFolder, MenuCommand::Delete};
+        MenuCommand r1 = st.renameIsEdit   ? MenuCommand::EditDrive   : MenuCommand::Rename;
+        MenuCommand d1 = st.deleteIsDriveDel ? MenuCommand::DeleteDrive : MenuCommand::Delete;
+        const MenuCommand m[] = {MenuCommand::ToggleSelectMode, r1,
+                                 MenuCommand::NewFolder, d1};
         return m[col];
     }
     if (row == 3) {
@@ -87,7 +89,7 @@ bool BottomMainMenu::tryFocusAt(int r, int c, const MainMenuState& st) {
     }
     if (r < 2 || r > 5 || c < 0 || c > 3) return false;
     if (cellDisabled(r, c, st)) return false;
-    if (cmdAt(r, c) == MenuCommand::None) return false;
+    if (cmdAt(r, c, st) == MenuCommand::None) return false;
     focusRow_ = r;
     focusCol_ = c;
     return true;
@@ -131,7 +133,7 @@ void BottomMainMenu::activateCell(const MainMenuState& st) {
         return;
     }
     if (cellDisabled(focusRow_, focusCol_, st)) return;
-    MenuCommand cmd = cmdAt(focusRow_, focusCol_);
+    MenuCommand cmd = cmdAt(focusRow_, focusCol_, st);
     if (cmd != MenuCommand::None)
         pending_ = cmd;
 }
@@ -159,7 +161,9 @@ void BottomMainMenu::update(uint32_t deltaMs, uint64_t kDown, const MainMenuStat
 
 static const char* labelKey(int row, int col, const MainMenuState& st) {
     if (row == 2) {
-        const char* k[] = {"menu.select_toggle", "menu.rename", "menu.new_folder", "menu.delete"};
+        const char* rk = st.renameIsEdit    ? "menu.edit"         : "menu.rename";
+        const char* dk = st.deleteIsDriveDel ? "menu.delete_drive" : "menu.delete";
+        const char* k[] = {"menu.select_toggle", rk, "menu.new_folder", dk};
         return k[col];
     }
     if (row == 3) {

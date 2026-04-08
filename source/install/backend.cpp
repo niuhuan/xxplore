@@ -1214,7 +1214,14 @@ NcmPlaceHolderId contentIdToPlaceholderId(const NcmContentId& contentId) {
 }
 
 bool isRemotePath(const std::string& path) {
-    return path.rfind("web:", 0) == 0;
+    if (path.rfind("web:", 0) == 0)
+        return true;
+
+    auto schemePos = path.find(":/");
+    if (schemePos == std::string::npos)
+        return false;
+
+    return path.compare(0, schemePos + 2, "sdmc:/") != 0;
 }
 
 void emitLog(const InstallBackendCallbacks& callbacks, const std::string& line) {

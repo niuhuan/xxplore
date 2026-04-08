@@ -25,6 +25,8 @@ enum class MenuCommand {
     Help,
     About,
     ExitApp,
+    EditDrive,
+    DeleteDrive,
 };
 
 /// Per-frame UI state for the bottom sheet (filled by Application).
@@ -45,6 +47,11 @@ struct MainMenuState {
     bool disableHelp         = false;
     bool disableAbout        = false;
     bool disableExit         = false;
+
+    /// When true, Rename cell shows "Edit" label and fires EditDrive command.
+    bool renameIsEdit        = false;
+    /// When true, Delete cell fires DeleteDrive command (for network drives in root).
+    bool deleteIsDriveDel    = false;
 };
 
 /// Bottom-anchored 4-column grid main menu with slide animation.
@@ -75,7 +82,7 @@ private:
     bool tryFocusAt(int r, int c, const MainMenuState& st);
 
     bool cellDisabled(int row, int col, const MainMenuState& st) const;
-    MenuCommand cmdAt(int row, int col) const;
+    MenuCommand cmdAt(int row, int col, const MainMenuState& st) const;
 };
 
 } // namespace xplore

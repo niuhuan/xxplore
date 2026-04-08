@@ -1,14 +1,19 @@
 #include "application.hpp"
 #include "fs/fs_api.hpp"
 #include "fs/clipboard.hpp"
+#include "fs/provider_manager.hpp"
+#include "fs/smb_provider.hpp"
+#include "fs/webdav_provider.hpp"
 #include "i18n/i18n.hpp"
 #include "swkbd_input.hpp"
 #include "ui/file_list.hpp"
 #include "ui/font_manager.hpp"
 #include "ui/image_viewer.hpp"
 #include "ui/installer_screen.hpp"
+#include "ui/loading_overlay.hpp"
 #include "ui/main_menu.hpp"
 #include "ui/modals.hpp"
+#include "ui/network_drive_form.hpp"
 #include "ui/renderer.hpp"
 #include "ui/settings_screen.hpp"
 #include "ui/theme.hpp"
@@ -16,9 +21,13 @@
 #include "ui/websocket_installer_screen.hpp"
 #include "util/app_config.hpp"
 
+#include <algorithm>
 #include <cstdio>
 #include <cstring>
+#include <memory>
+#include <mutex>
 #include <string>
+#include <thread>
 #include <utility>
 #include <vector>
 #include <switch.h>
@@ -27,7 +36,8 @@ namespace xplore {
 
 namespace {
 
-enum { ACTION_NONE = 0, ACTION_ENTER, ACTION_GO_UP, ACTION_WEBSOCKET_INSTALLER };
+enum { ACTION_NONE = 0, ACTION_ENTER, ACTION_GO_UP, ACTION_WEBSOCKET_INSTALLER,
+       ACTION_ADD_NETWORK_DRIVE };
 enum ActivePanel { PANEL_LEFT, PANEL_RIGHT };
 
 struct IconEntry {
@@ -38,6 +48,22 @@ struct IconEntry {
 struct PanelState {
     std::string      path;
     xplore::FileList list;
+};
+
+struct PendingPanelLoad {
+    bool                  active = false;
+    ActivePanel           panel = PANEL_LEFT;
+    std::string           path;
+    std::vector<ListItem> items;
+    std::string           err;
+    bool                  finished = false;
+    std::mutex            mutex;
+    std::thread           worker;
+
+    void join() {
+        if (worker.joinable())
+            worker.join();
+    }
 };
 
 static float easeOutCubic(float t) {
@@ -76,7 +102,8 @@ constexpr uint64_t kNormalImageDecodeLimit = 96ULL * 1024ULL * 1024ULL;
 static std::vector<IconEntry> loadIcons(Renderer& renderer) {
     const char* names[] = {
         "folder", "file", "image", "video", "audio",
-        "archive", "text", "code", "settings", "download", "back"
+        "archive", "text", "code", "settings", "download", "back",
+        "network", "add"
     };
     std::vector<IconEntry> icons;
     for (auto n : names) {
@@ -94,43 +121,93 @@ static SDL_Texture* findIcon(const std::vector<IconEntry>& icons, const char* na
     return nullptr;
 }
 
-static std::vector<ListItem> buildItemsForPath(const std::string& path,
-                                               const std::vector<IconEntry>& icons,
-                                               const I18n& i18n) {
+static bool parseSmbAddress(const std::string& address, std::string& server,
+                            std::string& share) {
+    server = address;
+    share.clear();
+    auto slash = server.find('/');
+    if (slash == std::string::npos)
+        return false;
+    share = server.substr(slash + 1);
+    server = server.substr(0, slash);
+    return !server.empty() && !share.empty();
+}
+
+static bool buildItemsForPath(const std::string& path, const std::vector<IconEntry>& icons,
+                              const I18n& i18n, fs::ProviderManager& provMgr,
+                              std::vector<ListItem>& itemsOut, std::string* errOut = nullptr) {
     std::vector<ListItem> items;
 
-    if (fs::isVirtualRoot(path)) {
-        auto roots = fs::getRootEntries();
-        for (auto& r : roots)
-            items.push_back({r.name, findIcon(icons, "folder"), ACTION_ENTER});
+    if (fs::ProviderManager::isVirtualRoot(path)) {
+        auto roots = provMgr.getRootEntries();
+        for (auto& r : roots) {
+            const char* iconName = "folder";
+            std::string metadata;
+            // Network providers get the "network" icon and carry drive id as metadata
+            std::string rootPath = r.name + "/";
+            if (provMgr.isNetworkPath(rootPath)) {
+                iconName = "network";
+                // Resolve the provider to get its id for metadata
+                std::string relPath;
+                auto* prov = provMgr.resolveProvider(rootPath, relPath);
+                if (prov) metadata = prov->providerId();
+            }
+            ListItem li;
+            li.label = r.name;
+            li.icon = findIcon(icons, iconName);
+            li.action = ACTION_ENTER;
+            li.metadata = metadata;
+            items.push_back(std::move(li));
+        }
         items.push_back({i18n.t("root.websocket_installer"), findIcon(icons, "download"),
                          ACTION_WEBSOCKET_INSTALLER});
-        return items;
+        items.push_back({i18n.t("root.add_network_drive"), findIcon(icons, "add"),
+                         ACTION_ADD_NETWORK_DRIVE});
+        itemsOut = std::move(items);
+        return true;
     }
 
     items.push_back({"..", findIcon(icons, "back"), ACTION_GO_UP});
-    auto entries = fs::listDir(path);
+    std::string errListDir;
+    auto entries = provMgr.listDir(path, errListDir);
+    if (!errListDir.empty()) {
+        if (errOut)
+            *errOut = errListDir;
+        return false;
+    }
     for (auto& e : entries) {
         int action = e.isDirectory ? ACTION_ENTER : ACTION_NONE;
         items.push_back({e.name, findIcon(icons, fs::iconForEntry(e)), action});
     }
-    return items;
+    itemsOut = std::move(items);
+    return true;
 }
 
-static void navigatePanel(PanelState& panel, const std::string& newPath,
-                          const std::vector<IconEntry>& icons, const I18n& i18n) {
+static bool navigatePanel(PanelState& panel, const std::string& newPath,
+                          const std::vector<IconEntry>& icons, const I18n& i18n,
+                          fs::ProviderManager& provMgr, std::string* errOut = nullptr) {
+    std::vector<ListItem> items;
+    if (!buildItemsForPath(newPath, icons, i18n, provMgr, items, errOut))
+        return false;
+
+    bool hasGoUp = !fs::ProviderManager::isVirtualRoot(newPath);
+    bool allowSel = provMgr.pathAllowsSelection(newPath);
     panel.path = newPath;
-    bool hasGoUp = !fs::isVirtualRoot(newPath);
-    bool allowSel = fs::pathAllowsSelection(newPath);
-    panel.list.setItems(buildItemsForPath(newPath, icons, i18n), hasGoUp, allowSel);
+    panel.list.setItems(std::move(items), hasGoUp, allowSel);
+    return true;
 }
 
-static void reloadPanel(PanelState& panel, const std::vector<IconEntry>& icons,
-                        const I18n& i18n, int preserveCursor) {
-    bool hasGoUp = !fs::isVirtualRoot(panel.path);
-    bool allowSel = fs::pathAllowsSelection(panel.path);
-    panel.list.reloadItems(buildItemsForPath(panel.path, icons, i18n), hasGoUp, allowSel,
-                           preserveCursor);
+static bool reloadPanel(PanelState& panel, const std::vector<IconEntry>& icons,
+                        const I18n& i18n, int preserveCursor,
+                        fs::ProviderManager& provMgr, std::string* errOut = nullptr) {
+    std::vector<ListItem> items;
+    if (!buildItemsForPath(panel.path, icons, i18n, provMgr, items, errOut))
+        return false;
+
+    bool hasGoUp = !fs::ProviderManager::isVirtualRoot(panel.path);
+    bool allowSel = provMgr.pathAllowsSelection(panel.path);
+    panel.list.reloadItems(std::move(items), hasGoUp, allowSel, preserveCursor);
+    return true;
 }
 
 static void renderFooter(Renderer& renderer, FontManager& fontManager, const I18n& i18n) {
@@ -175,7 +252,7 @@ static void renderFooter(Renderer& renderer, FontManager& fontManager, const I18
     }
 }
 
-enum class PendingConfirm { None, DeleteItems, PasteChoice };
+enum class PendingConfirm { None, DeleteItems, PasteChoice, DeleteDrive };
 
 } // namespace
 
@@ -212,6 +289,25 @@ int Application::run(int argc, char* argv[]) {
 
     std::vector<IconEntry> icons = loadIcons(renderer);
 
+    // Provider manager: register local + network drives from config
+    fs::ProviderManager provMgr;
+    for (const auto& drive : appConfig.networkDrives) {
+        std::shared_ptr<fs::FileProvider> prov;
+        if (drive.type == config::NetworkDriveType::WebDAV) {
+            prov = std::make_shared<fs::WebDavProvider>(
+                drive.id, drive.name, drive.address, drive.username, drive.password);
+        }
+        else if (drive.type == config::NetworkDriveType::SMB2) {
+            std::string server;
+            std::string share;
+            if (parseSmbAddress(drive.address, server, share)) {
+                prov = std::make_shared<fs::SmbProvider>(
+                    drive.id, drive.name, server, share, drive.username, drive.password);
+            }
+        }
+        if (prov) provMgr.registerProvider(prov);
+    }
+
     Toast toast;
     fs::Clipboard clipboard;
     BottomMainMenu mainMenu;
@@ -224,11 +320,13 @@ int Application::run(int argc, char* argv[]) {
     InstallerScreen installerScreen;
     SettingsScreen settingsScreen;
     WebSocketInstallerScreen webSocketInstallerScreen;
+    NetworkDriveForm networkDriveForm;
+    LoadingOverlay loadingOverlay;
 
     PanelState leftPanel;
     PanelState rightPanel;
-    navigatePanel(leftPanel, "/", icons, i18n);
-    navigatePanel(rightPanel, "/", icons, i18n);
+    navigatePanel(leftPanel, "/", icons, i18n, provMgr);
+    navigatePanel(rightPanel, "/", icons, i18n, provMgr);
 
     ActivePanel activePanel = PANEL_LEFT;
     PanelAnim anim;
@@ -245,19 +343,36 @@ int Application::run(int argc, char* argv[]) {
 
     bool appQuit = false;
     std::vector<InstallQueueItem> pendingInstallItems;
+    PendingPanelLoad pendingPanelLoad;
 
     auto activeRef = [&]() -> PanelState& {
         return activePanel == PANEL_LEFT ? leftPanel : rightPanel;
     };
 
+    auto panelFor = [&](ActivePanel panel) -> PanelState& {
+        return panel == PANEL_LEFT ? leftPanel : rightPanel;
+    };
+
+    auto parseSmbAddress = [](const std::string& address, std::string& server,
+                              std::string& share) -> bool {
+        server = address;
+        share.clear();
+        auto slash = server.find('/');
+        if (slash == std::string::npos)
+            return false;
+        share = server.substr(slash + 1);
+        server = server.substr(0, slash);
+        return !server.empty() && !share.empty();
+    };
+
     auto refreshPath = [&](const std::string& dir, int keepCursor) {
         if (leftPanel.path == dir) {
             leftPanel.list.clearSelection();
-            reloadPanel(leftPanel, icons, i18n, keepCursor);
+            reloadPanel(leftPanel, icons, i18n, keepCursor, provMgr);
         }
         if (rightPanel.path == dir) {
             rightPanel.list.clearSelection();
-            reloadPanel(rightPanel, icons, i18n, keepCursor);
+            reloadPanel(rightPanel, icons, i18n, keepCursor, provMgr);
         }
     };
 
@@ -274,17 +389,59 @@ int Application::run(int argc, char* argv[]) {
         if (refreshLeft) {
             int keepCursor = leftPanel.list.getCursor();
             leftPanel.list.clearSelection();
-            reloadPanel(leftPanel, icons, i18n, keepCursor);
+            reloadPanel(leftPanel, icons, i18n, keepCursor, provMgr);
         }
         if (refreshRight) {
             int keepCursor = rightPanel.list.getCursor();
             rightPanel.list.clearSelection();
-            reloadPanel(rightPanel, icons, i18n, keepCursor);
+            reloadPanel(rightPanel, icons, i18n, keepCursor, provMgr);
         }
     };
 
     auto appTitle = [&]() -> const char* {
         return appletMode ? "Xplore(Applet)" : "Xplore";
+    };
+
+    auto startPathLoad = [&](ActivePanel panel, const std::string& targetPath) {
+        if (pendingPanelLoad.active)
+            return;
+
+        pendingPanelLoad.join();
+        pendingPanelLoad.active = true;
+        pendingPanelLoad.panel = panel;
+        pendingPanelLoad.path = targetPath;
+        pendingPanelLoad.items.clear();
+        pendingPanelLoad.err.clear();
+        pendingPanelLoad.finished = false;
+
+        loadingOverlay.show(i18n.t("loading.connecting"), 15000, 180);
+#ifdef XPLORE_DEBUG
+        std::printf("[nav] async load start panel=%s path=%s\n",
+                    panel == PANEL_LEFT ? "left" : "right", targetPath.c_str());
+#endif
+        pendingPanelLoad.worker = std::thread([&icons, &i18n, &provMgr, &pendingPanelLoad,
+                                               targetPath]() {
+            std::vector<ListItem> items;
+            std::string err;
+            buildItemsForPath(targetPath, icons, i18n, provMgr, items, &err);
+
+            std::lock_guard<std::mutex> lock(pendingPanelLoad.mutex);
+            pendingPanelLoad.items = std::move(items);
+            pendingPanelLoad.err = std::move(err);
+            pendingPanelLoad.finished = true;
+        });
+    };
+
+    auto navigateToPath = [&](ActivePanel panel, const std::string& targetPath) {
+        PanelState& targetPanel = panelFor(panel);
+        if (!provMgr.isNetworkPath(targetPath)) {
+            std::string err;
+            if (!navigatePanel(targetPanel, targetPath, icons, i18n, provMgr, &err))
+                toast.show(i18n.t("error.operation_failed"), err.c_str(), ToastKind::Error, 3200);
+            return;
+        }
+
+        startPathLoad(panel, targetPath);
     };
 
     auto buildInstallItems = [&](PanelState& panel, bool useSelection) {
@@ -301,7 +458,8 @@ int Application::run(int argc, char* argv[]) {
                 return;
 
             fs::FileStatInfo statInfo;
-            if (!fs::statPath(fullPath, statInfo) || statInfo.isDirectory)
+            std::string statErr;
+            if (!provMgr.statPath(fullPath, statInfo, statErr) || statInfo.isDirectory)
                 return;
 
             InstallQueueItem queueItem;
@@ -362,7 +520,8 @@ int Application::run(int argc, char* argv[]) {
 
     auto openImageFile = [&](const std::string& path) {
         fs::FileStatInfo statInfo;
-        if (!fs::statPath(path, statInfo) || statInfo.isDirectory) {
+        std::string statErr;
+        if (!provMgr.statPath(path, statInfo, statErr) || statInfo.isDirectory) {
             toast.show(i18n.t("error.operation_failed"), "", ToastKind::Error, 2500);
             return;
         }
@@ -412,18 +571,44 @@ int Application::run(int argc, char* argv[]) {
 
     auto fillMenuState = [&](MainMenuState& st) {
         PanelState& a  = activeRef();
-        bool vr        = fs::isVirtualRoot(a.path);
-        bool allow     = fs::pathAllowsSelection(a.path);
+        bool vr        = fs::ProviderManager::isVirtualRoot(a.path);
+        bool allow     = provMgr.pathAllowsSelection(a.path);
         FileList& al   = a.list;
 
-        if (vr || !allow) {
+        if (vr) {
+            // In virtual root: most ops disabled, but check if cursor is on a network drive
+            st.disableSelectToggle = true;
+            st.disableRename = true;
+            st.disableNewFolder = true;
+            st.disableDelete = true;
+            st.disableCopy = st.disableCut = st.disablePaste = true;
+            st.disableViewClip = st.disableClearClip = true;
+            st.disableSettings = st.disableHelp = st.disableAbout = st.disableExit = false;
+
+            // Check if cursor is on a network drive entry
+            const ListItem* cur = al.getSelectedItem();
+            if (cur && !cur->metadata.empty()) {
+                // Cursor is on a network drive → enable Edit and Delete
+                st.renameIsEdit = true;
+                st.deleteIsDriveDel = true;
+                st.disableRename = false;
+                st.disableDelete = false;
+            }
+
+            char ctxBuf[256];
+            snprintf(ctxBuf, sizeof(ctxBuf), "%s %s", i18n.t("menu.context_current"), i18n.t("menu.context_root"));
+            st.contextLine = ctxBuf;
+            return;
+        }
+
+        if (!allow) {
             st.disableSelectToggle = true;
             st.disableRename = st.disableNewFolder = st.disableDelete = true;
             st.disableCopy = st.disableCut = st.disablePaste = true;
             st.disableViewClip = st.disableClearClip = true;
             st.disableSettings = st.disableHelp = st.disableAbout = st.disableExit = false;
             char ctxBuf[256];
-            snprintf(ctxBuf, sizeof(ctxBuf), "%s %s", i18n.t("menu.context_current"), i18n.t("menu.context_root"));
+            snprintf(ctxBuf, sizeof(ctxBuf), "%s %s", i18n.t("menu.context_current"), a.path.c_str());
             st.contextLine = ctxBuf;
             return;
         }
@@ -522,7 +707,8 @@ int Application::run(int argc, char* argv[]) {
             modalConfirm.isOpen() || modalChoice.isOpen() || modalProgress.isOpen() ||
             modalInfo.isOpen() || modalInstallPrompt.isOpen() || imageViewer.isOpen() ||
             installerScreen.isOpen() || settingsScreen.isOpen() ||
-            webSocketInstallerScreen.isOpen();
+            webSocketInstallerScreen.isOpen() || networkDriveForm.isOpen() ||
+            loadingOverlay.isActive();
         bool menuBlocking = mainMenu.isOpen();
 
         // Plus toggles menu
@@ -556,8 +742,8 @@ int Application::run(int argc, char* argv[]) {
                         toast.show(i18n.t("error.operation_failed"), "load language failed",
                                    ToastKind::Error, 3200);
                     } else {
-                        reloadPanel(leftPanel, icons, i18n, leftPanel.list.getCursor());
-                        reloadPanel(rightPanel, icons, i18n, rightPanel.list.getCursor());
+                        reloadPanel(leftPanel, icons, i18n, leftPanel.list.getCursor(), provMgr);
+                        reloadPanel(rightPanel, icons, i18n, rightPanel.list.getCursor(), provMgr);
                         settingsScreen.close();
                     }
                 }
@@ -568,6 +754,88 @@ int Application::run(int argc, char* argv[]) {
             WebSocketInstallerAction action = webSocketInstallerScreen.handleInput(kDown);
             if (action == WebSocketInstallerAction::Close)
                 webSocketInstallerScreen.close();
+        }
+
+        if (networkDriveForm.isOpen()) {
+            NetworkDriveFormAction formAction = networkDriveForm.handleInput(kDown, i18n);
+            if (formAction == NetworkDriveFormAction::Close) {
+                networkDriveForm.close();
+            } else if (formAction == NetworkDriveFormAction::Save) {
+                const config::NetworkDriveConfig& cfg = networkDriveForm.result();
+                // Validate
+                if (cfg.name.empty()) {
+                    toast.show(i18n.t("network_form.error_name_required"), "", ToastKind::Warning, 3000);
+                } else if (cfg.address.empty()) {
+                    toast.show(i18n.t("network_form.error_address_required"), "", ToastKind::Warning, 3000);
+                } else {
+                    std::shared_ptr<fs::FileProvider> prov;
+                    std::string providerErr;
+                    if (cfg.type == config::NetworkDriveType::WebDAV) {
+                        prov = std::make_shared<fs::WebDavProvider>(
+                            cfg.id, cfg.name, cfg.address, cfg.username, cfg.password);
+                    }
+                    else if (cfg.type == config::NetworkDriveType::SMB2) {
+                        std::string server;
+                        std::string share;
+                        if (!parseSmbAddress(cfg.address, server, share)) {
+                            providerErr = "SMB address must be server/share";
+                        } else {
+                            prov = std::make_shared<fs::SmbProvider>(
+                                cfg.id, cfg.name, server, share, cfg.username, cfg.password);
+                        }
+                    }
+
+                    if (!providerErr.empty()) {
+                        toast.show(i18n.t("error.operation_failed"), providerErr.c_str(),
+                                   ToastKind::Error, 3200);
+                        continue;
+                    }
+                    if (!prov) {
+                        toast.show(i18n.t("error.operation_failed"), "Failed to create provider",
+                                   ToastKind::Error, 3200);
+                        continue;
+                    }
+
+                    config::AppConfig nextConfig = appConfig;
+                    if (networkDriveForm.isEditing()) {
+                        bool updated = false;
+                        for (auto& d : nextConfig.networkDrives) {
+                            if (d.id == cfg.id) {
+                                d = cfg;
+                                updated = true;
+                                break;
+                            }
+                        }
+                        if (!updated)
+                            nextConfig.networkDrives.push_back(cfg);
+                    } else {
+                        nextConfig.networkDrives.push_back(cfg);
+                    }
+
+                    std::string saveErr;
+                    if (!config::saveConfig(configPath, nextConfig, saveErr)) {
+                        toast.show(i18n.t("error.operation_failed"), saveErr.c_str(),
+                                   ToastKind::Error, 3200);
+                        continue;
+                    }
+
+                    if (networkDriveForm.isEditing())
+                        provMgr.removeProvider(cfg.id);
+
+                    provMgr.registerProvider(prov);
+                    appConfig = std::move(nextConfig);
+
+                    // Refresh panels that show virtual root
+                    if (fs::ProviderManager::isVirtualRoot(leftPanel.path))
+                        reloadPanel(leftPanel, icons, i18n, leftPanel.list.getCursor(), provMgr);
+                    if (fs::ProviderManager::isVirtualRoot(rightPanel.path))
+                        reloadPanel(rightPanel, icons, i18n, rightPanel.list.getCursor(), provMgr);
+
+                    networkDriveForm.close();
+                    toast.show(i18n.t(networkDriveForm.isEditing() ? "toast.drive_updated" : "toast.drive_added"),
+                               "", ToastKind::Success, 2200);
+                }
+            }
         }
 
         if (installerScreen.isOpen()) {
@@ -595,7 +863,7 @@ int Application::run(int argc, char* argv[]) {
                         modalProgress.setDetail(p);
                         if (!pumpProgress()) break;
                         std::string err;
-                        if (!fs::removeAll(p, err)) { delErr = true; delLastErr = err; }
+                        if (!provMgr.removeAll(p, err)) { delErr = true; delLastErr = err; }
                     }
                     modalProgress.close();
                     refreshPath(savedDeleteDir, savedDeleteCursor);
@@ -607,6 +875,42 @@ int Application::run(int argc, char* argv[]) {
                         toast.show(i18n.t("error.operation_failed"), delLastErr.c_str(), ToastKind::Error, 3000);
                     else
                         toast.show(i18n.t("toast.deleted"), "", ToastKind::Success, 2200);
+                }
+                if (pendingConfirm == PendingConfirm::DeleteDrive) {
+                    modalConfirm.close();
+                    std::string driveId = pendingDeletePaths.empty() ? "" : pendingDeletePaths[0];
+                    pendingConfirm = PendingConfirm::None;
+                    pendingDeletePaths.clear();
+                    if (!driveId.empty()) {
+                        // Get display prefix before removing the provider
+                        std::string deletedDisplayPrefix;
+                        auto* driveProv = provMgr.findProvider(driveId);
+                        if (driveProv)
+                            deletedDisplayPrefix = driveProv->displayPrefix() + "/";
+
+                        provMgr.removeProvider(driveId);
+                        appConfig.networkDrives.erase(
+                            std::remove_if(appConfig.networkDrives.begin(),
+                                           appConfig.networkDrives.end(),
+                                           [&](const config::NetworkDriveConfig& d) {
+                                               return d.id == driveId;
+                                           }),
+                            appConfig.networkDrives.end());
+                        std::string saveErr;
+                        config::saveConfig(configPath, appConfig, saveErr);
+                        // If any panel was inside this drive or at virtual root, refresh/navigate
+                        bool leftAffected = fs::ProviderManager::isVirtualRoot(leftPanel.path)
+                            || (!deletedDisplayPrefix.empty() &&
+                                leftPanel.path.rfind(deletedDisplayPrefix, 0) == 0);
+                        bool rightAffected = fs::ProviderManager::isVirtualRoot(rightPanel.path)
+                            || (!deletedDisplayPrefix.empty() &&
+                                rightPanel.path.rfind(deletedDisplayPrefix, 0) == 0);
+                        if (leftAffected)
+                            navigatePanel(leftPanel, "/", icons, i18n, provMgr);
+                        if (rightAffected)
+                            navigatePanel(rightPanel, "/", icons, i18n, provMgr);
+                        toast.show(i18n.t("toast.drive_deleted"), "", ToastKind::Success, 2200);
+                    }
                 }
             } else if (cr == ConfirmResult::Cancelled) {
                 modalConfirm.close();
@@ -642,11 +946,11 @@ int Application::run(int argc, char* argv[]) {
                         std::string err;
                         bool ok = true;
                         if (ch == ChoiceResult::Merge) {
-                            ok = isCut ? fs::moveEntryMerge(src, dst, err, onProgress)
-                                       : fs::copyEntryMerge(src, dst, err, onProgress);
+                            ok = isCut ? provMgr.moveEntryMerge(src, dst, err, onProgress)
+                                       : provMgr.copyEntryMerge(src, dst, err, onProgress);
                         } else if (ch == ChoiceResult::Overwrite) {
-                            ok = isCut ? fs::moveEntryOverwrite(src, dst, err, onProgress)
-                                       : fs::copyEntryOverwrite(src, dst, err, onProgress);
+                            ok = isCut ? provMgr.moveEntryOverwrite(src, dst, err, onProgress)
+                                       : provMgr.copyEntryOverwrite(src, dst, err, onProgress);
                         }
                         if (!ok && err != "interrupted") { anyError = true; lastErr = err; }
                     }
@@ -674,12 +978,18 @@ int Application::run(int argc, char* argv[]) {
                 modalInstallPrompt.close();
                 if (result == InstallPromptResult::Install ||
                     result == InstallPromptResult::InstallAndDelete) {
+                    auto sourceCallbacks = std::make_shared<InstallDataSourceCallbacks>();
+                    sourceCallbacks->readRange =
+                        [&provMgr](const InstallQueueItem& item, uint64_t offset, size_t size,
+                                   void* outBuffer, std::string& errOut) {
+                            return provMgr.readFile(item.path, offset, size, outBuffer, errOut);
+                        };
                     installerScreen.open(
                         pendingInstallItems,
                         result == InstallPromptResult::InstallAndDelete
                             ? InstallDeleteMode::DeleteAfterInstall
                             : InstallDeleteMode::KeepFiles,
-                        appletMode);
+                        appletMode, sourceCallbacks);
                     activeList.clearSelection();
                 } else {
                     pendingInstallItems.clear();
@@ -718,17 +1028,20 @@ int Application::run(int argc, char* argv[]) {
                                            ToastKind::Info, 2600);
                         } else {
                             std::string target;
-                            if (fs::isVirtualRoot(active.path))
+                            if (fs::ProviderManager::isVirtualRoot(active.path))
                                 target = item->label + "/";
                             else
                                 target = fs::joinPath(active.path, item->label);
-                            navigatePanel(active, target, icons, i18n);
+                            navigateToPath(activePanel, target);
                         }
                     } else if (item->action == ACTION_GO_UP) {
-                        navigatePanel(active, fs::parentPath(active.path), icons, i18n);
+                        navigateToPath(activePanel, fs::parentPath(active.path));
                     } else if (item->action == ACTION_WEBSOCKET_INSTALLER) {
                         activeList.clearSelection();
                         webSocketInstallerScreen.open(i18n);
+                    } else if (item->action == ACTION_ADD_NETWORK_DRIVE) {
+                        activeList.clearSelection();
+                        networkDriveForm.openNew();
                     } else {
                         bool hasSelection    = activeList.hasSelection();
                         bool currentSelected = hasSelection && activeList.isSelected(activeList.getCursor());
@@ -748,8 +1061,8 @@ int Application::run(int argc, char* argv[]) {
             }
 
             if (kDown & HidNpadButton_B) {
-                if (!fs::isVirtualRoot(active.path))
-                    navigatePanel(active, fs::parentPath(active.path), icons, i18n);
+                if (!fs::ProviderManager::isVirtualRoot(active.path))
+                    navigateToPath(activePanel, fs::parentPath(active.path));
             }
 
             if (kDown & HidNpadButton_Y) activeList.toggleSelect();
@@ -853,7 +1166,7 @@ int Application::run(int argc, char* argv[]) {
                 // Check if any destination already exists
                 bool anyExists = false;
                 for (const auto& e : clipboard.items()) {
-                    if (fs::pathExists(fs::joinPath(active.path, e.name))) { anyExists = true; break; }
+                    if (provMgr.pathExists(fs::joinPath(active.path, e.name))) { anyExists = true; break; }
                 }
                 if (anyExists) {
                     bool isCut = (clipboard.operation() == fs::ClipboardOp::Cut);
@@ -879,8 +1192,8 @@ int Application::run(int argc, char* argv[]) {
                         std::string src = e.fullPath;
                         std::string dst = fs::joinPath(destDir, e.name);
                         std::string err;
-                        bool ok = isCut ? fs::moveEntrySimple(src, dst, err, onProgress)
-                                        : fs::copyEntrySimple(src, dst, err, onProgress);
+                        bool ok = isCut ? provMgr.moveEntrySimple(src, dst, err, onProgress)
+                                        : provMgr.copyEntrySimple(src, dst, err, onProgress);
                         if (!ok && err != "interrupted") { anyError = true; lastErr = err; }
                     }
                     modalProgress.close();
@@ -929,12 +1242,12 @@ int Application::run(int argc, char* argv[]) {
                     break;
                 }
                 std::string full = fs::joinPath(active.path, name);
-                if (fs::pathExists(full)) {
+                if (provMgr.pathExists(full)) {
                     toast.show(i18n.t("error.exists"), "", ToastKind::Warning, 3000);
                     break;
                 }
                 std::string err;
-                if (!fs::createDirectory(full, err)) {
+                if (!provMgr.createDirectory(full, err)) {
                     toast.show(i18n.t("error.operation_failed"), err.c_str(), ToastKind::Error, 3000);
                     break;
                 }
@@ -977,12 +1290,12 @@ int Application::run(int argc, char* argv[]) {
                 std::string from = fs::joinPath(active.path, target->label);
                 std::string to   = fs::joinPath(active.path, newName);
                 if (from == to) break;
-                if (fs::pathExists(to)) {
+                if (provMgr.pathExists(to)) {
                     toast.show(i18n.t("error.exists"), "", ToastKind::Warning, 3000);
                     break;
                 }
                 std::string err;
-                if (!fs::renamePath(from, to, err)) {
+                if (!provMgr.renamePath(from, to, err)) {
                     toast.show(i18n.t("error.operation_failed"), err.c_str(), ToastKind::Error, 3000);
                     break;
                 }
@@ -991,12 +1304,82 @@ int Application::run(int argc, char* argv[]) {
                 mainMenu.close();
                 break;
             }
+            case MenuCommand::EditDrive: {
+                const ListItem* cur = activeList.getSelectedItem();
+                if (!cur || cur->metadata.empty()) break;
+                // Find config for this drive id
+                for (const auto& d : appConfig.networkDrives) {
+                    if (d.id == cur->metadata) {
+                        networkDriveForm.openEdit(d);
+                        break;
+                    }
+                }
+                mainMenu.close();
+                break;
+            }
+            case MenuCommand::DeleteDrive: {
+                const ListItem* cur = activeList.getSelectedItem();
+                if (!cur || cur->metadata.empty()) break;
+                // Store drive id for pending deletion
+                pendingDeletePaths.clear();
+                pendingDeletePaths.push_back(cur->metadata); // reuse for drive id
+                savedDeleteDir    = active.path;
+                savedDeleteCursor = activeList.getCursor();
+                modalConfirm.open(i18n.t("confirm.delete_drive_title"),
+                                  i18n.t("confirm.delete_drive_body"));
+                pendingConfirm = PendingConfirm::DeleteDrive;
+                mainMenu.close();
+                break;
+            }
             default: break;
             }
         }
 
         toast.update(delta);
+        loadingOverlay.update(delta);
         anim.update(delta);
+
+        if (pendingPanelLoad.active) {
+            bool ready = false;
+            std::vector<ListItem> loadedItems;
+            std::string loadErr;
+            ActivePanel loadPanel = pendingPanelLoad.panel;
+            std::string loadPath = pendingPanelLoad.path;
+            {
+                std::lock_guard<std::mutex> lock(pendingPanelLoad.mutex);
+                ready = pendingPanelLoad.finished;
+                if (ready) {
+                    loadedItems = std::move(pendingPanelLoad.items);
+                    loadErr = std::move(pendingPanelLoad.err);
+                }
+            }
+
+            if (ready) {
+                pendingPanelLoad.join();
+                pendingPanelLoad.active = false;
+                loadingOverlay.hide();
+
+                if (!loadErr.empty()) {
+#ifdef XPLORE_DEBUG
+                    std::printf("[nav] async load failed path=%s err=%s\n", loadPath.c_str(),
+                                loadErr.c_str());
+#endif
+                    toast.show(i18n.t("error.operation_failed"), loadErr.c_str(),
+                               ToastKind::Error, 3200);
+                } else {
+#ifdef XPLORE_DEBUG
+                    std::printf("[nav] async load done path=%s count=%zu\n", loadPath.c_str(),
+                                loadedItems.size());
+#endif
+                    PanelState& targetPanel = panelFor(loadPanel);
+                    bool hasGoUp = !fs::ProviderManager::isVirtualRoot(loadPath);
+                    bool allowSel = provMgr.pathAllowsSelection(loadPath);
+                    targetPanel.path = loadPath;
+                    targetPanel.list.clearSelection();
+                    targetPanel.list.setItems(std::move(loadedItems), hasGoUp, allowSel);
+                }
+            }
+        }
 
         leftPanel.list.updateCache(renderer, fontManager, theme::ACTIVE_PANEL_W,
                                    theme::PANEL_CONTENT_H);
@@ -1007,7 +1390,8 @@ int Application::run(int argc, char* argv[]) {
 
         const bool anyOverlay =
             mainMenu.isOpen() || modalConfirm.isOpen() || modalChoice.isOpen()
-            || modalProgress.isOpen() || modalInfo.isOpen() || modalInstallPrompt.isOpen();
+            || modalProgress.isOpen() || modalInfo.isOpen() || modalInstallPrompt.isOpen()
+            || networkDriveForm.isOpen() || loadingOverlay.isActive();
         if (anyOverlay && !imageViewer.isOpen() && !installerScreen.isOpen()
             && !settingsScreen.isOpen()
             && !webSocketInstallerScreen.isOpen()) {
@@ -1016,7 +1400,8 @@ int Application::run(int argc, char* argv[]) {
         }
         if (!imageViewer.isOpen() && !installerScreen.isOpen()
             && !settingsScreen.isOpen()
-            && !webSocketInstallerScreen.isOpen())
+            && !webSocketInstallerScreen.isOpen()
+            && !networkDriveForm.isOpen())
             renderFooter(renderer, fontManager, i18n);
 
         if (mainMenu.isOpen()) mainMenu.render(renderer, fontManager, i18n, menuSt);
@@ -1029,6 +1414,8 @@ int Application::run(int argc, char* argv[]) {
         installerScreen.render(renderer, fontManager, i18n);
         settingsScreen.render(renderer, fontManager, i18n);
         webSocketInstallerScreen.render(renderer, fontManager, i18n);
+        networkDriveForm.render(renderer, fontManager, i18n);
+        loadingOverlay.render(renderer, fontManager, i18n);
 
         toast.render(renderer, fontManager);
         renderer.present();

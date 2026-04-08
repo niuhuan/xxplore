@@ -1,10 +1,13 @@
 #pragma once
 #include <cstdint>
 #include <deque>
+#include <memory>
 #include <mutex>
 #include <string>
 #include <thread>
 #include <vector>
+
+#include "install/backend.hpp"
 
 namespace xplore {
 
@@ -26,7 +29,8 @@ class InstallerScreen {
 public:
     ~InstallerScreen() { joinWorker(); }
 
-    void open(std::vector<InstallQueueItem> items, InstallDeleteMode deleteMode, bool appletMode);
+    void open(std::vector<InstallQueueItem> items, InstallDeleteMode deleteMode, bool appletMode,
+              std::shared_ptr<InstallDataSourceCallbacks> sourceCallbacks = nullptr);
     void close();
 
     bool isOpen() const { return open_; }
@@ -63,6 +67,7 @@ private:
     float                    totalProgress_   = 0.0f;
     std::string              currentStatus_;
     std::string              errorMessage_;
+    std::shared_ptr<InstallDataSourceCallbacks> sourceCallbacks_;
     mutable std::mutex       mutex_;
     std::thread              worker_;
 };

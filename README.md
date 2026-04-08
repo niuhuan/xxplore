@@ -28,3 +28,18 @@ make
 ```
 
 The generated `xplore.nro` can then be launched from hbmenu.
+
+### Optional: SMB2 Support
+
+SMB2 network drive support requires [libsmb2](https://github.com/sahlberg/libsmb2). The Makefile auto-detects whether it is installed and enables it automatically.
+
+```bash
+# Clone libsmb2
+git clone https://github.com/sahlberg/libsmb2.git
+cd libsmb2
+
+# Build and install for Switch
+sudo make -f Makefile.platform switch_install
+```
+
+After installation, rebuild Xplore and SMB2 will be enabled automatically.

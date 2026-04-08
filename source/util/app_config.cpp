@@ -2,6 +2,7 @@
 #include <cerrno>
 #include <cstdio>
 #include <cstring>
+#include <ctime>
 #include <json-c/json.h>
 #include <json-c/json_tokener.h>
 
@@ -80,6 +81,30 @@ bool parseLanguageId(const char* id, AppLanguage& outLanguage) {
     return false;
 }
 
+const char* networkDriveTypeId(NetworkDriveType type) {
+    switch (type) {
+    case NetworkDriveType::WebDAV: return "webdav";
+    case NetworkDriveType::SMB2:   return "smb2";
+    }
+    return "webdav";
+}
+
+bool parseNetworkDriveTypeId(const char* id, NetworkDriveType& out) {
+    if (!id) return false;
+    if (std::strcmp(id, "webdav") == 0) { out = NetworkDriveType::WebDAV; return true; }
+    if (std::strcmp(id, "smb2") == 0)   { out = NetworkDriveType::SMB2;   return true; }
+    return false;
+}
+
+std::string generateDriveId() {
+    // Simple timestamp-based id
+    static int counter = 0;
+    char buf[64];
+    std::snprintf(buf, sizeof(buf), "%u_%d",
+                  static_cast<unsigned>(std::time(nullptr)), counter++);
+    return std::string(buf);
+}
+
 bool loadConfigFromArgv0(const char* argv0, AppConfig& outConfig, std::string& outPath) {
     outConfig = defaultConfig();
     outPath = deriveConfigPath(argv0);
@@ -118,6 +143,37 @@ bool loadConfigFromArgv0(const char* argv0, AppConfig& outConfig, std::string& o
         ok = true;
     } while (false);
 
+    // Parse network drives (optional, does not affect ok flag)
+    json_object* drivesArr = nullptr;
+    if (json_object_object_get_ex(root, "networkDrives", &drivesArr) && drivesArr &&
+        json_object_is_type(drivesArr, json_type_array)) {
+        int len = json_object_array_length(drivesArr);
+        for (int i = 0; i < len; i++) {
+            json_object* drv = json_object_array_get_idx(drivesArr, i);
+            if (!drv || !json_object_is_type(drv, json_type_object))
+                continue;
+
+            NetworkDriveConfig ndc;
+            json_object* val = nullptr;
+
+            if (json_object_object_get_ex(drv, "id", &val) && val)
+                ndc.id = json_object_get_string(val);
+            if (json_object_object_get_ex(drv, "name", &val) && val)
+                ndc.name = json_object_get_string(val);
+            if (json_object_object_get_ex(drv, "type", &val) && val)
+                parseNetworkDriveTypeId(json_object_get_string(val), ndc.type);
+            if (json_object_object_get_ex(drv, "address", &val) && val)
+                ndc.address = json_object_get_string(val);
+            if (json_object_object_get_ex(drv, "username", &val) && val)
+                ndc.username = json_object_get_string(val);
+            if (json_object_object_get_ex(drv, "password", &val) && val)
+                ndc.password = json_object_get_string(val);
+
+            if (!ndc.id.empty() && !ndc.name.empty())
+                outConfig.networkDrives.push_back(std::move(ndc));
+        }
+    }
+
     json_object_put(root);
     if (!ok)
         outConfig = defaultConfig();
@@ -137,6 +193,20 @@ bool saveConfig(const std::string& path, const AppConfig& config, std::string& e
     }
 
     json_object_object_add(root, "language", json_object_new_string(languageId(config.language)));
+
+    // Serialize network drives
+    json_object* drivesArr = json_object_new_array();
+    for (const auto& ndc : config.networkDrives) {
+        json_object* drv = json_object_new_object();
+        json_object_object_add(drv, "id",       json_object_new_string(ndc.id.c_str()));
+        json_object_object_add(drv, "name",     json_object_new_string(ndc.name.c_str()));
+        json_object_object_add(drv, "type",     json_object_new_string(networkDriveTypeId(ndc.type)));
+        json_object_object_add(drv, "address",  json_object_new_string(ndc.address.c_str()));
+        json_object_object_add(drv, "username", json_object_new_string(ndc.username.c_str()));
+        json_object_object_add(drv, "password", json_object_new_string(ndc.password.c_str()));
+        json_object_array_add(drivesArr, drv);
+    }
+    json_object_object_add(root, "networkDrives", drivesArr);
 
     const char* jsonText = json_object_to_json_string_ext(root, JSON_C_TO_STRING_PRETTY);
     if (!jsonText) {

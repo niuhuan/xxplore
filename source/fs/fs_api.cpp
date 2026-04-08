@@ -236,23 +236,31 @@ std::vector<FileEntry> listDir(const std::string& path) {
 }
 
 std::string parentPath(const std::string& path) {
-    // "sdmc:/" → virtual root
-    if (path == "sdmc:/" || path == "sdmc:")
-        return "/";
-
     // Strip trailing slash for the search
     std::string p = path;
     while (p.size() > 1 && p.back() == '/')
         p.pop_back();
 
+    // Find the "prefix:" part (e.g. "sdmc:", "webdav-abc123:")
+    auto colonPos = p.find(':');
+
+    // "sdmc:/" or "webdav-abc123:/" → virtual root
+    if (colonPos != std::string::npos && colonPos + 1 >= p.size())
+        return "/";
+    // "prefix:" with no path → virtual root
+    if (colonPos != std::string::npos && p.size() == colonPos + 1)
+        return "/";
+
     auto pos = p.rfind('/');
     if (pos == std::string::npos)
         return "/";
 
-    // Keep the slash after "sdmc:" → "sdmc:/"
+    // Keep the slash after "prefix:" → "prefix:/"
     std::string parent = p.substr(0, pos);
-    if (parent == "sdmc:")
-        return "sdmc:/";
+    if (colonPos != std::string::npos && parent.size() == colonPos + 1) {
+        // parent is "prefix:" → return "prefix:/"
+        return parent + "/";
+    }
     if (parent.empty())
         return "/";
     return parent;

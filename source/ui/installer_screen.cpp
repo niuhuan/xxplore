@@ -39,7 +39,8 @@ SDL_Color withAlpha(SDL_Color color, Uint8 alpha) {
 } // namespace
 
 void InstallerScreen::open(std::vector<InstallQueueItem> items, InstallDeleteMode deleteMode,
-                           bool appletMode) {
+                           bool appletMode,
+                           std::shared_ptr<InstallDataSourceCallbacks> sourceCallbacks) {
     joinWorker();
     {
         std::lock_guard<std::mutex> lock(mutex_);
@@ -61,6 +62,7 @@ void InstallerScreen::open(std::vector<InstallQueueItem> items, InstallDeleteMod
         totalProgress_   = 0.0f;
         currentStatus_.clear();
         errorMessage_.clear();
+        sourceCallbacks_ = std::move(sourceCallbacks);
     }
     appendLog(appletMode ? "Applet mode detected." : "Title override mode detected.");
     appendLog("Preparing install queue...");
@@ -75,6 +77,7 @@ void InstallerScreen::close() {
     logs_.clear();
     currentStatus_.clear();
     errorMessage_.clear();
+    sourceCallbacks_.reset();
 }
 
 bool InstallerScreen::shouldRefreshOnClose() const {
@@ -118,11 +121,13 @@ void InstallerScreen::startInstallWorker() {
     std::vector<InstallQueueItem> items;
     bool installToNand = false;
     bool deleteAfterInstall = false;
+    std::shared_ptr<InstallDataSourceCallbacks> sourceCallbacks;
     {
         std::lock_guard<std::mutex> lock(mutex_);
         items = items_;
         installToNand = target_ == InstallTarget::Nand;
         deleteAfterInstall = deleteMode_ == InstallDeleteMode::DeleteAfterInstall;
+        sourceCallbacks = sourceCallbacks_;
         state_ = State::Running;
         currentProgress_ = 0.0f;
         totalProgress_ = 0.0f;
@@ -130,7 +135,8 @@ void InstallerScreen::startInstallWorker() {
         errorMessage_.clear();
     }
 
-    worker_ = std::thread([this, items = std::move(items), installToNand, deleteAfterInstall]() mutable {
+    worker_ = std::thread([this, items = std::move(items), installToNand, deleteAfterInstall,
+                           sourceCallbacks = std::move(sourceCallbacks)]() mutable {
         util::acquireScreenAwake();
         struct ScreenAwakeRelease {
             ~ScreenAwakeRelease() { util::releaseScreenAwake(); }
@@ -151,7 +157,8 @@ void InstallerScreen::startInstallWorker() {
         };
 
         std::string err;
-        bool ok = runInstallQueue(items, installToNand, deleteAfterInstall, callbacks, err);
+        bool ok = runInstallQueue(items, installToNand, deleteAfterInstall, callbacks, err,
+                                  sourceCallbacks.get());
 
         std::lock_guard<std::mutex> lock(mutex_);
         currentProgress_ = ok ? 1.0f : currentProgress_;

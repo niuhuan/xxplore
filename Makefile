@@ -33,6 +33,7 @@ ARCH	:=	-march=armv8-a+crc+crypto -mtune=cortex-a57 -mtp=soft -fPIE
 CFLAGS	:=	-g -Wall -O2 -ffunction-sections \
 			$(ARCH) $(DEFINES)
 CFLAGS	+=	`sdl2-config --cflags`
+CFLAGS	+=	`$(PREFIX)pkg-config --cflags libcurl`
 CFLAGS	+=	$(INCLUDE) -D__SWITCH__
 
 CXXFLAGS	:= $(CFLAGS) -fno-rtti -std=gnu++17
@@ -42,6 +43,9 @@ LDFLAGS	=	-specs=$(DEVKITPRO)/libnx/switch.specs -g $(ARCH) -Wl,-Map,$(notdir $*
 
 LIBS	:=	-lSDL2_ttf -lSDL2_image -lSDL2_gfx -lpng -ljpeg -lwebp -ljson-c `sdl2-config --libs` `$(PREFIX)pkg-config --libs freetype2`
 LIBS	+=	-lzstd
+LIBS	+=	`$(PREFIX)pkg-config --libs libcurl` -lmbedtls -lmbedx509 -lmbedcrypto
+
+LIBS	+=	-lsmb2
 
 #---------------------------------------------------------------------------------
 # list of directories containing libraries, this must be the top level containing

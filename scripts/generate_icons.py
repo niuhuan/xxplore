@@ -146,6 +146,34 @@ def icon_back():
     return img
 
 
+def icon_network():
+    """Globe / network icon for network drives."""
+    img = new_img()
+    d = ImageDraw.Draw(img)
+    color = ACCENT
+    # Outer circle
+    d.ellipse([8, 8, 40, 40], outline=color, width=2)
+    # Horizontal lines
+    d.line([(8, 24), (40, 24)], fill=color, width=2)
+    d.line([(12, 16), (36, 16)], fill=color, width=1)
+    d.line([(12, 32), (36, 32)], fill=color, width=1)
+    # Vertical ellipse (meridian)
+    d.ellipse([18, 8, 30, 40], outline=color, width=2)
+    return img
+
+
+def icon_add():
+    """Plus sign icon for 'add network address'."""
+    img = new_img()
+    d = ImageDraw.Draw(img)
+    color = (100, 200, 130, 255)  # green
+    # Horizontal bar
+    d.rounded_rectangle([10, 20, 38, 28], radius=2, fill=color)
+    # Vertical bar
+    d.rounded_rectangle([20, 10, 28, 38], radius=2, fill=color)
+    return img
+
+
 def main():
     os.makedirs(OUT_DIR, exist_ok=True)
 
@@ -161,6 +189,8 @@ def main():
         "settings": icon_settings,
         "download": icon_download,
         "back": icon_back,
+        "network": icon_network,
+        "add": icon_add,
     }
 
     for name, gen_fn in icons.items():

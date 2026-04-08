@@ -15,6 +15,7 @@ struct ListItem {
     std::string  label;
     SDL_Texture* icon   = nullptr;  ///< Non-owning; texture lifetime managed elsewhere
     int          action = 0;
+    std::string  metadata;          ///< Hidden payload (e.g. network drive id)
 };
 
 /// Scrollable vertical list of ListItems with off-screen render caching,
