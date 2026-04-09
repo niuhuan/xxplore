@@ -1,12 +1,69 @@
 #pragma once
 #include "fs/file_provider.hpp"
 #include "fs/fs_api.hpp"
+#include <cstdint>
+#include <functional>
 #include <memory>
 #include <string>
 #include <vector>
 
 namespace xplore {
 namespace fs {
+
+enum class TransferOperation {
+    Copy,
+    Move,
+    Delete,
+};
+
+enum class TransferStrategy {
+    Simple,
+    Merge,
+    Overwrite,
+};
+
+enum class TransferDecision {
+    Abort,
+    Ignore,
+    IgnoreAll,
+};
+
+struct TransferEntry {
+    std::string srcPath;
+    std::string dstPath;
+};
+
+struct TransferProgress {
+    TransferOperation operation = TransferOperation::Copy;
+    std::string       currentPath;
+    std::string       targetPath;
+    uint64_t          currentBytes = 0;
+    uint64_t          currentTotalBytes = 0;
+    uint64_t          overallBytes = 0;
+    uint64_t          overallTotalBytes = 0;
+};
+
+struct TransferError {
+    TransferOperation operation = TransferOperation::Copy;
+    std::string       currentPath;
+    std::string       targetPath;
+    std::string       message;
+};
+
+struct TransferCallbacks {
+    std::function<bool(const TransferProgress&)> onProgress;
+    std::function<TransferDecision(const TransferError&)> onError;
+};
+
+struct TransferResult {
+    bool        interrupted = false;
+    bool        aborted = false;
+    bool        ignoredErrors = false;
+    bool        copyHadErrors = false;
+    bool        moveHadErrors = false;
+    bool        deleteHadErrors = false;
+    std::string lastError;
+};
 
 /// Manages registered FileProviders and routes path-based operations.
 ///
@@ -90,6 +147,16 @@ public:
 
     /// Whether the path points to a network provider (not local).
     bool isNetworkPath(const std::string& fullPath) const;
+
+    /// Unified buffered batch transfer for copy / move operations.
+    TransferResult transferEntries(const std::vector<TransferEntry>& entries,
+                                   TransferOperation operation,
+                                   TransferStrategy strategy,
+                                   const TransferCallbacks& callbacks = {});
+
+    /// Recursive delete with per-entry error handling.
+    TransferResult deleteEntries(const std::vector<std::string>& paths,
+                                 const TransferCallbacks& callbacks = {});
 
 private:
     std::vector<std::shared_ptr<FileProvider>> providers_;

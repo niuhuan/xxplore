@@ -111,14 +111,48 @@ void WebSocketInstallerScreen::close() {
     open_ = false;
 }
 
-WebSocketInstallerAction WebSocketInstallerScreen::handleInput(uint64_t kDown) {
+WebSocketInstallerAction WebSocketInstallerScreen::handleInput(uint64_t kDown,
+                                                               const TouchTap* tap) {
     if (!open_)
         return WebSocketInstallerAction::None;
 
-    if (server_.isInstalling())
-        return WebSocketInstallerAction::None;
-
     if (!server_.isRunning()) {
+        const int cardX = 40;
+        const int cardY = 40;
+        const int x = cardX + 24;
+        const int summaryY = cardY + 20 + 34 + 32;
+        const int hintY = summaryY + 32;
+        const int targetW = 180;
+        const int targetH = 42;
+        const int gap = 16;
+        const int targetsY = hintY + 36;
+        const int buttonsY = targetsY + targetH + 28;
+
+        if (tap && tap->active) {
+            if (pointInRect(tap, x, targetsY, targetW, targetH)) {
+                focusRow_ = 0;
+                targetFocusCol_ = 0;
+                return WebSocketInstallerAction::None;
+            }
+            if (pointInRect(tap, x + targetW + gap, targetsY, targetW, targetH)) {
+                focusRow_ = 0;
+                targetFocusCol_ = 1;
+                return WebSocketInstallerAction::None;
+            }
+            if (pointInRect(tap, x, buttonsY, targetW, targetH)) {
+                focusRow_ = 1;
+                buttonFocusCol_ = 0;
+                return WebSocketInstallerAction::Close;
+            }
+            if (pointInRect(tap, x + targetW + gap, buttonsY, targetW, targetH)) {
+                focusRow_ = 1;
+                buttonFocusCol_ = 1;
+                server_.start(targetFocusCol_ == 0 ? WebInstallTarget::Nand
+                                                   : WebInstallTarget::SdCard);
+                return WebSocketInstallerAction::None;
+            }
+        }
+
         if (kDown & HidNpadButton_B)
             return WebSocketInstallerAction::Close;
 
@@ -151,6 +185,21 @@ WebSocketInstallerAction WebSocketInstallerScreen::handleInput(uint64_t kDown) {
         }
         return WebSocketInstallerAction::None;
     }
+
+    if (server_.isInstalling())
+        return WebSocketInstallerAction::None;
+
+    const int cardX = 40;
+    const int cardY = 40;
+    const int cardH = theme::SCREEN_H - 80;
+    const int x = cardX + 24;
+    const int buttonW = 180;
+    const int buttonH = 42;
+    const int buttonX = x;
+    const int buttonY = cardY + cardH - 24 - buttonH;
+
+    if (tap && tap->active && pointInRect(tap, buttonX, buttonY, buttonW, buttonH))
+        return WebSocketInstallerAction::Close;
 
     if (kDown & (HidNpadButton_B | HidNpadButton_Plus))
         return WebSocketInstallerAction::Close;
@@ -316,6 +365,14 @@ void WebSocketInstallerScreen::render(Renderer& renderer, FontManager& fm, const
         fm.drawText(renderer.sdl(), i18n.t("websocket_installer.close_server_hint"),
                     x, cardY + cardH - 32,
                     theme::FONT_SIZE_SMALL, theme::TEXT_SECONDARY);
+        const int buttonW = 180;
+        const int buttonH = 42;
+        const int buttonY = cardY + cardH - 24 - buttonH;
+        renderer.drawRoundedRectFilled(x, buttonY, buttonW, buttonH, 10, theme::SURFACE);
+        renderer.drawRoundedRect(x, buttonY, buttonW, buttonH, 10, theme::DIVIDER);
+        fm.drawText(renderer.sdl(), i18n.t("installer.cancel"), x + 16,
+                    buttonY + (buttonH - theme::FONT_SIZE_ITEM) / 2,
+                    theme::FONT_SIZE_ITEM, theme::TEXT);
     }
 }
 

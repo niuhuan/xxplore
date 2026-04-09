@@ -556,6 +556,7 @@ int Application::run(int argc, char* argv[]) {
     ModalConfirm modalConfirm;
     ModalChoice  modalChoice;
     ModalProgress modalProgress;
+    ModalErrorAction modalErrorAction;
     ModalInfo modalInfo;
     ModalInstallPrompt modalInstallPrompt;
     ImageViewer imageViewer;
@@ -1064,6 +1065,75 @@ int Application::run(int argc, char* argv[]) {
         return !interrupted;
     };
 
+    auto promptTransferError = [&](const fs::TransferError& error) -> fs::TransferDecision {
+        const char* titleKey = "error.operation_failed";
+        switch (error.operation) {
+        case fs::TransferOperation::Copy: titleKey = "error.copy_failed"; break;
+        case fs::TransferOperation::Move: titleKey = "error.move_failed"; break;
+        case fs::TransferOperation::Delete: titleKey = "error.delete_failed"; break;
+        }
+
+        std::string body = error.currentPath;
+        if (!error.targetPath.empty()) {
+            body += " -> ";
+            body += error.targetPath;
+        }
+
+        modalErrorAction.open(i18n.t(titleKey), body, error.message);
+        for (;;) {
+            padUpdate(&pad);
+            u64 k = padGetButtonsDown(&pad);
+            HidTouchScreenState touchState {};
+            hidGetTouchScreenStates(&touchState, 1);
+            TouchTap tap;
+            if (touchState.count > 0 && !touchWasDown) {
+                tap.active = true;
+                tap.x = static_cast<int>(touchState.touches[0].x);
+                tap.y = static_cast<int>(touchState.touches[0].y);
+            }
+            touchWasDown = touchState.count > 0;
+
+            ErrorActionResult action = modalErrorAction.handleInput(k, &tap);
+            renderScene();
+            int scrimH = theme::HEADER_H + theme::PANEL_CONTENT_H;
+            renderer.drawRectFilled(0, 0, theme::SCREEN_W, scrimH, theme::MENU_SCRIM_CONTENT);
+            renderFooter(renderer, fontManager, i18n, appConfig.touchButtonsEnabled);
+            modalProgress.render(renderer, fontManager, i18n);
+            modalErrorAction.render(renderer, fontManager, i18n);
+            renderer.present();
+
+            switch (action) {
+            case ErrorActionResult::Abort:
+                modalErrorAction.close();
+                return fs::TransferDecision::Abort;
+            case ErrorActionResult::Ignore:
+                modalErrorAction.close();
+                return fs::TransferDecision::Ignore;
+            case ErrorActionResult::IgnoreAll:
+                modalErrorAction.close();
+                return fs::TransferDecision::IgnoreAll;
+            case ErrorActionResult::None:
+            default:
+                break;
+            }
+            SDL_Delay(16);
+        }
+    };
+
+    auto makeTransferCallbacks = [&](fs::TransferOperation op) -> fs::TransferCallbacks {
+        fs::TransferCallbacks callbacks;
+        callbacks.onProgress = [&](const fs::TransferProgress& progress) -> bool {
+            (void)op;
+            modalProgress.setDetail(progress.currentPath);
+            modalProgress.setProgress(progress.overallBytes, progress.overallTotalBytes);
+            return pumpProgress();
+        };
+        callbacks.onError = [&](const fs::TransferError& error) -> fs::TransferDecision {
+            return promptTransferError(error);
+        };
+        return callbacks;
+    };
+
     while (appletMainLoop()) {
         uint32_t now   = SDL_GetTicks();
         uint32_t delta = now - lastTick;
@@ -1155,7 +1225,7 @@ int Application::run(int argc, char* argv[]) {
         }
 
         case InputLayer::WebSocketInstallerScreen: {
-            WebSocketInstallerAction action = webSocketInstallerScreen.handleInput(kDown);
+            WebSocketInstallerAction action = webSocketInstallerScreen.handleInput(kDown, &tap);
             if (action == WebSocketInstallerAction::Close)
                 webSocketInstallerScreen.close();
             break;
@@ -1265,22 +1335,21 @@ int Application::run(int argc, char* argv[]) {
                     pendingConfirm = PendingConfirm::None;
                     interrupted = false;
                     modalProgress.open(i18n.t("progress.deleting"), "");
-                    bool delErr = false;
-                    std::string delLastErr;
-                    for (const auto& p : pendingDeletePaths) {
-                        modalProgress.setDetail(p);
-                        if (!pumpProgress()) break;
-                        std::string err;
-                        if (!provMgr.removeAll(p, err)) { delErr = true; delLastErr = err; }
-                    }
+                    fs::TransferResult deleteResult = provMgr.deleteEntries(
+                        pendingDeletePaths,
+                        makeTransferCallbacks(fs::TransferOperation::Delete));
                     modalProgress.close();
                     refreshPath(savedDeleteDir, savedDeleteCursor);
                     pendingDeletePaths.clear();
-                    if (interrupted) {
+                    if (deleteResult.interrupted) {
                         toast.show(i18n.t("toast.interrupted"), "", ToastKind::Warning, 4000);
                         clipboard.clear();
-                    } else if (delErr)
-                        toast.show(i18n.t("error.operation_failed"), delLastErr.c_str(), ToastKind::Error, 3000);
+                    } else if (deleteResult.aborted)
+                        toast.show(i18n.t("error.operation_failed"),
+                                   deleteResult.lastError.c_str(), ToastKind::Error, 3000);
+                    else if (deleteResult.ignoredErrors)
+                        toast.show(i18n.t("toast.delete_had_errors"), "",
+                                   ToastKind::Warning, 3200);
                     else
                         toast.show(i18n.t("toast.deleted"), "", ToastKind::Success, 2200);
                 }
@@ -1359,35 +1428,30 @@ int Application::run(int argc, char* argv[]) {
                     interrupted = false;
                     const char* progressTitle = isCut ? i18n.t("progress.moving") : i18n.t("progress.copying");
                     modalProgress.open(progressTitle, "");
-                    bool anyError = false;
-                    std::string lastErr;
-                    auto onProgress = [&](const std::string& f) -> bool {
-                        modalProgress.setDetail(f);
-                        return pumpProgress();
-                    };
-                    for (const auto& e : clipboard.items()) {
-                        if (interrupted) break;
-                        std::string src = e.fullPath;
-                        std::string dst = fs::joinPath(destDir, e.name);
-                        std::string err;
-                        bool ok = true;
-                        if (ch == ChoiceResult::Merge) {
-                            ok = isCut ? provMgr.moveEntryMerge(src, dst, err, onProgress)
-                                       : provMgr.copyEntryMerge(src, dst, err, onProgress);
-                        } else if (ch == ChoiceResult::Overwrite) {
-                            ok = isCut ? provMgr.moveEntryOverwrite(src, dst, err, onProgress)
-                                       : provMgr.copyEntryOverwrite(src, dst, err, onProgress);
-                        }
-                        if (!ok && err != "interrupted") { anyError = true; lastErr = err; }
-                    }
+                    std::vector<fs::TransferEntry> transferEntries;
+                    transferEntries.reserve(clipboard.items().size());
+                    for (const auto& e : clipboard.items())
+                        transferEntries.push_back({e.fullPath, fs::joinPath(destDir, e.name)});
+                    fs::TransferStrategy strategy = ch == ChoiceResult::Merge
+                        ? fs::TransferStrategy::Merge
+                        : fs::TransferStrategy::Overwrite;
+                    fs::TransferResult transferResult = provMgr.transferEntries(
+                        transferEntries,
+                        isCut ? fs::TransferOperation::Move : fs::TransferOperation::Copy,
+                        strategy, makeTransferCallbacks(isCut ? fs::TransferOperation::Move
+                                                              : fs::TransferOperation::Copy));
                     modalProgress.close();
                     clipboard.clear();
                     activeList.clearSelection();
                     refreshPath(destDir, savedCursor);
-                    if (interrupted)
+                    if (transferResult.interrupted)
                         toast.show(i18n.t("toast.interrupted"), "", ToastKind::Warning, 4000);
-                    else if (anyError)
-                        toast.show(i18n.t("error.operation_failed"), lastErr.c_str(), ToastKind::Error, 3000);
+                    else if (transferResult.aborted)
+                        toast.show(i18n.t("error.operation_failed"),
+                                   transferResult.lastError.c_str(), ToastKind::Error, 3000);
+                    else if (transferResult.ignoredErrors)
+                        toast.show(i18n.t(isCut ? "toast.move_had_errors" : "toast.copy_had_errors"),
+                                   "", ToastKind::Warning, 3200);
                     else
                         toast.show(i18n.t(isCut ? "toast.moved" : "toast.copied"), "", ToastKind::Success, 2200);
                 }
@@ -1719,29 +1783,28 @@ int Application::run(int argc, char* argv[]) {
                     interrupted = false;
                     const char* progressTitle = isCut ? i18n.t("progress.moving") : i18n.t("progress.copying");
                     modalProgress.open(progressTitle, "");
-                    bool anyError = false;
-                    std::string lastErr;
-                    auto onProgress = [&](const std::string& f) -> bool {
-                        modalProgress.setDetail(f);
-                        return pumpProgress();
-                    };
-                    for (const auto& e : clipboard.items()) {
-                        if (interrupted) break;
-                        std::string src = e.fullPath;
-                        std::string dst = fs::joinPath(destDir, e.name);
-                        std::string err;
-                        bool ok = isCut ? provMgr.moveEntrySimple(src, dst, err, onProgress)
-                                        : provMgr.copyEntrySimple(src, dst, err, onProgress);
-                        if (!ok && err != "interrupted") { anyError = true; lastErr = err; }
-                    }
+                    std::vector<fs::TransferEntry> transferEntries;
+                    transferEntries.reserve(clipboard.items().size());
+                    for (const auto& e : clipboard.items())
+                        transferEntries.push_back({e.fullPath, fs::joinPath(destDir, e.name)});
+                    fs::TransferResult transferResult = provMgr.transferEntries(
+                        transferEntries,
+                        isCut ? fs::TransferOperation::Move : fs::TransferOperation::Copy,
+                        fs::TransferStrategy::Simple,
+                        makeTransferCallbacks(isCut ? fs::TransferOperation::Move
+                                                    : fs::TransferOperation::Copy));
                     modalProgress.close();
                     clipboard.clear();
                     activeList.clearSelection();
                     refreshPath(destDir, savedCursor);
-                    if (interrupted)
+                    if (transferResult.interrupted)
                         toast.show(i18n.t("toast.interrupted"), "", ToastKind::Warning, 4000);
-                    else if (anyError)
-                        toast.show(i18n.t("error.operation_failed"), lastErr.c_str(), ToastKind::Error, 3000);
+                    else if (transferResult.aborted)
+                        toast.show(i18n.t("error.operation_failed"),
+                                   transferResult.lastError.c_str(), ToastKind::Error, 3000);
+                    else if (transferResult.ignoredErrors)
+                        toast.show(i18n.t(isCut ? "toast.move_had_errors" : "toast.copy_had_errors"),
+                                   "", ToastKind::Warning, 3200);
                     else
                         toast.show(i18n.t(isCut ? "toast.moved" : "toast.copied"), "", ToastKind::Success, 2200);
                 }

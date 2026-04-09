@@ -2,10 +2,567 @@
 #include "fs/local_provider.hpp"
 #include "fs/webdav_provider.hpp"
 #include <algorithm>
+#include <condition_variable>
 #include <cstdio>
+#include <cstring>
+#include <deque>
+#include <mutex>
+#include <thread>
 
 namespace xplore {
 namespace fs {
+
+namespace {
+
+constexpr size_t kTransferChunkSize = 128 * 1024;
+constexpr size_t kTransferBufferCount = 20;
+
+std::string pathBaseName(const std::string& fullPath) {
+    std::size_t slash = fullPath.find_last_of('/');
+    if (slash == std::string::npos)
+        return fullPath;
+    if (slash + 1 >= fullPath.size())
+        return {};
+    return fullPath.substr(slash + 1);
+}
+
+bool validateDestinationName(const std::string& dstPath, std::string& errOut) {
+    if (ProviderManager::extractPrefix(dstPath) != "sdmc:")
+        return true;
+
+    std::string name = pathBaseName(dstPath);
+    if (name.empty())
+        return true;
+    if (isValidEnglishFileName(name))
+        return true;
+
+    errOut = "destination filename is not ASCII";
+    return false;
+}
+
+void markIgnoredError(TransferResult& result, TransferOperation operation,
+                      const std::string& message) {
+    result.ignoredErrors = true;
+    result.lastError = message;
+    switch (operation) {
+    case TransferOperation::Copy: result.copyHadErrors = true; break;
+    case TransferOperation::Move: result.moveHadErrors = true; break;
+    case TransferOperation::Delete: result.deleteHadErrors = true; break;
+    }
+}
+
+bool reportProgress(const TransferCallbacks& callbacks, TransferResult& result,
+                    const TransferProgress& progress) {
+    if (!callbacks.onProgress)
+        return true;
+    if (callbacks.onProgress(progress))
+        return true;
+    result.interrupted = true;
+    result.lastError = "interrupted";
+    return false;
+}
+
+bool handleTransferError(const TransferCallbacks& callbacks, TransferResult& result,
+                         bool& ignoreAll, const TransferError& error) {
+    result.lastError = error.message;
+    if (ignoreAll) {
+        markIgnoredError(result, error.operation, error.message);
+        return true;
+    }
+
+    TransferDecision decision = TransferDecision::Abort;
+    if (callbacks.onError)
+        decision = callbacks.onError(error);
+
+    switch (decision) {
+    case TransferDecision::Ignore:
+        markIgnoredError(result, error.operation, error.message);
+        return true;
+    case TransferDecision::IgnoreAll:
+        ignoreAll = true;
+        markIgnoredError(result, error.operation, error.message);
+        return true;
+    case TransferDecision::Abort:
+    default:
+        result.aborted = true;
+        return false;
+    }
+}
+
+class BufferedFileReader {
+public:
+    BufferedFileReader(FileProvider* srcProv, std::string srcRel, uint64_t totalBytes)
+        : srcProv_(srcProv), srcRel_(std::move(srcRel)), totalBytes_(totalBytes) {
+        threaded_ = totalBytes_ > kTransferChunkSize && kTransferBufferCount > 1;
+    }
+
+    ~BufferedFileReader() { stop(); }
+
+    bool start(std::string& errOut) {
+        if (!srcProv_) {
+            errOut = "missing source provider";
+            return false;
+        }
+        stop();
+        nextOffset_ = 0;
+        bytesScheduled_ = 0;
+        producerDone_ = false;
+        stopRequested_ = false;
+        producerError_.clear();
+        queue_.clear();
+        directOffset_ = 0;
+        if (!threaded_)
+            return true;
+        worker_ = std::thread([this]() { workerLoop(); });
+        return true;
+    }
+
+    bool readNext(void* outBuffer, size_t size, std::string& errOut) {
+        if (!threaded_) {
+            bool ok = srcProv_->readFile(srcRel_, directOffset_, size, outBuffer, errOut);
+            if (ok)
+                directOffset_ += size;
+            return ok;
+        }
+
+        Chunk chunk;
+        {
+            std::unique_lock<std::mutex> lock(mutex_);
+            cvNotEmpty_.wait(lock, [this]() {
+                return stopRequested_ || !queue_.empty() || producerDone_ || !producerError_.empty();
+            });
+
+            if (!producerError_.empty()) {
+                errOut = producerError_;
+                return false;
+            }
+            if (queue_.empty()) {
+                errOut = "prefetch ended unexpectedly";
+                return false;
+            }
+            chunk = std::move(queue_.front());
+            queue_.pop_front();
+            cvNotFull_.notify_one();
+        }
+
+        if (!chunk.error.empty()) {
+            errOut = chunk.error;
+            return false;
+        }
+        if (chunk.data.size() != size) {
+            char buf[128];
+            std::snprintf(buf, sizeof(buf), "chunk size mismatch: expected %zu got %zu",
+                          size, chunk.data.size());
+            errOut = buf;
+            return false;
+        }
+
+        std::memcpy(outBuffer, chunk.data.data(), size);
+        return true;
+    }
+
+    void stop() {
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            stopRequested_ = true;
+            cvNotEmpty_.notify_all();
+            cvNotFull_.notify_all();
+        }
+        if (worker_.joinable())
+            worker_.join();
+    }
+
+private:
+    struct Chunk {
+        std::vector<unsigned char> data;
+        std::string error;
+    };
+
+    void workerLoop() {
+        for (;;) {
+            uint64_t offset = 0;
+            size_t size = 0;
+            {
+                std::unique_lock<std::mutex> lock(mutex_);
+                cvNotFull_.wait(lock, [this]() {
+                    return stopRequested_ || queue_.size() < kTransferBufferCount;
+                });
+                if (stopRequested_)
+                    break;
+                if (bytesScheduled_ >= totalBytes_) {
+                    producerDone_ = true;
+                    cvNotEmpty_.notify_all();
+                    break;
+                }
+
+                offset = nextOffset_;
+                uint64_t remaining = totalBytes_ - bytesScheduled_;
+                size = static_cast<size_t>(std::min<uint64_t>(remaining, kTransferChunkSize));
+                nextOffset_ += size;
+                bytesScheduled_ += size;
+            }
+
+            Chunk chunk;
+            chunk.data.resize(size);
+            std::string err;
+            if (!srcProv_->readFile(srcRel_, offset, size, chunk.data.data(), err))
+                chunk.error = err.empty() ? "read failed" : err;
+
+            {
+                std::lock_guard<std::mutex> lock(mutex_);
+                if (!chunk.error.empty()) {
+                    producerError_ = chunk.error;
+                    producerDone_ = true;
+                    cvNotEmpty_.notify_all();
+                    break;
+                }
+                queue_.push_back(std::move(chunk));
+                cvNotEmpty_.notify_one();
+            }
+        }
+    }
+
+    FileProvider* srcProv_ = nullptr;
+    std::string srcRel_;
+    uint64_t totalBytes_ = 0;
+    bool threaded_ = false;
+    uint64_t directOffset_ = 0;
+
+    uint64_t nextOffset_ = 0;
+    uint64_t bytesScheduled_ = 0;
+    bool producerDone_ = false;
+    bool stopRequested_ = false;
+    std::string producerError_;
+    std::deque<Chunk> queue_;
+    std::mutex mutex_;
+    std::condition_variable cvNotEmpty_;
+    std::condition_variable cvNotFull_;
+    std::thread worker_;
+};
+
+struct TransferRoot {
+    std::string srcPath;
+    std::string dstPath;
+    uint64_t    totalBytes = 0;
+};
+
+bool tryStat(ProviderManager& provMgr, const std::string& fullPath, FileStatInfo& out,
+             std::string& errOut) {
+    out = {};
+    if (!provMgr.statPath(fullPath, out, errOut))
+        return false;
+    return true;
+}
+
+bool scanEntryBytes(ProviderManager& provMgr, const std::string& fullPath,
+                    uint64_t& totalBytes, std::string& errOut) {
+    FileStatInfo info;
+    if (!tryStat(provMgr, fullPath, info, errOut))
+        return false;
+    if (!info.exists) {
+        errOut = "source does not exist";
+        return false;
+    }
+    if (!info.isDirectory) {
+        totalBytes += info.size;
+        return true;
+    }
+
+    auto entries = provMgr.listDir(fullPath, errOut);
+    if (!errOut.empty())
+        return false;
+    for (const auto& entry : entries) {
+        std::string child = joinPath(fullPath, entry.name);
+        if (!scanEntryBytes(provMgr, child, totalBytes, errOut))
+            return false;
+    }
+    return true;
+}
+
+bool copyFileBuffered(ProviderManager& provMgr, FileProvider* srcProv, const std::string& srcRel,
+                      const std::string& srcFull, FileProvider* dstProv,
+                      const std::string& dstRel, const std::string& dstFull,
+                      uint64_t fileSize, TransferOperation operation,
+                      const TransferCallbacks& callbacks, TransferResult& result,
+                      uint64_t& overallDone, uint64_t overallTotal) {
+    std::string err;
+    if (!validateDestinationName(dstFull, err)) {
+        result.lastError = err;
+        return false;
+    }
+
+    auto emitProgress = [&](uint64_t currentBytes) -> bool {
+        TransferProgress progress;
+        progress.operation = operation;
+        progress.currentPath = srcFull;
+        progress.targetPath = dstFull;
+        progress.currentBytes = currentBytes;
+        progress.currentTotalBytes = fileSize;
+        progress.overallBytes = overallDone + currentBytes;
+        progress.overallTotalBytes = overallTotal;
+        return reportProgress(callbacks, result, progress);
+    };
+
+    if (!emitProgress(0))
+        return false;
+
+    auto cleanupPartial = [&]() {
+        std::string cleanupErr;
+        provMgr.removeAll(dstFull, cleanupErr);
+    };
+
+    if (dstProv->kind() == ProviderKind::WebDav) {
+        auto* webdavDst = static_cast<WebDavProvider*>(dstProv);
+        BufferedFileReader reader(srcProv, srcRel, fileSize);
+        if (!reader.start(err)) {
+            result.lastError = err;
+            return false;
+        }
+        uint64_t nextOffset = 0;
+        bool ok = webdavDst->uploadFromStream(
+            dstRel, fileSize,
+            [&](void* outBuffer, size_t size, uint64_t offset, std::string& readErr) -> bool {
+                if (offset != nextOffset) {
+                    readErr = "unexpected PUT stream offset";
+                    return false;
+                }
+                if (size == 0)
+                    return true;
+                bool readOk = reader.readNext(outBuffer, size, readErr);
+                if (readOk)
+                    nextOffset += size;
+                return readOk;
+            },
+            err,
+            [&](uint64_t sentBytes) -> bool {
+                return emitProgress(sentBytes);
+            });
+        reader.stop();
+        if (!ok && err != "interrupted")
+            cleanupPartial();
+        result.lastError = err;
+        if (ok)
+            overallDone += fileSize;
+        return ok;
+    }
+
+    if (dstProv->supportsPartialWrite()) {
+        if (fileSize == 0) {
+            bool ok = dstProv->writeFileChunk(dstRel, 0, nullptr, 0, true, err);
+            result.lastError = err;
+            if (ok)
+                overallDone += fileSize;
+            return ok;
+        }
+
+        BufferedFileReader reader(srcProv, srcRel, fileSize);
+        if (!reader.start(err)) {
+            result.lastError = err;
+            return false;
+        }
+        std::vector<char> buf(kTransferChunkSize);
+        uint64_t offset = 0;
+        while (offset < fileSize) {
+            size_t chunk = static_cast<size_t>(
+                std::min<uint64_t>(fileSize - offset, static_cast<uint64_t>(buf.size())));
+            if (!reader.readNext(buf.data(), chunk, err)) {
+                reader.stop();
+                result.lastError = err;
+                cleanupPartial();
+                return false;
+            }
+            if (!dstProv->writeFileChunk(dstRel, offset, buf.data(), chunk, offset == 0, err)) {
+                reader.stop();
+                result.lastError = err;
+                cleanupPartial();
+                return false;
+            }
+            offset += chunk;
+            if (!emitProgress(offset)) {
+                reader.stop();
+                cleanupPartial();
+                return false;
+            }
+        }
+        reader.stop();
+        overallDone += fileSize;
+        return true;
+    }
+
+    if (fileSize > 256ULL * 1024ULL * 1024ULL) {
+        result.lastError = "destination provider does not support streaming writes (>256MB)";
+        return false;
+    }
+
+    std::vector<char> fullBuf(static_cast<size_t>(fileSize));
+    if (fileSize > 0 && !srcProv->readFile(srcRel, 0, static_cast<size_t>(fileSize),
+                                           fullBuf.data(), err)) {
+        result.lastError = err;
+        return false;
+    }
+    if (!dstProv->writeFile(dstRel, fullBuf.data(), fullBuf.size(), err)) {
+        result.lastError = err;
+        cleanupPartial();
+        return false;
+    }
+    if (!emitProgress(fileSize)) {
+        cleanupPartial();
+        return false;
+    }
+    overallDone += fileSize;
+    return true;
+}
+
+bool deletePathRecursive(ProviderManager& provMgr, const std::string& fullPath,
+                         TransferOperation operation, const TransferCallbacks& callbacks,
+                         TransferResult& result, bool& ignoreAll) {
+    FileStatInfo info;
+    std::string err;
+    if (!tryStat(provMgr, fullPath, info, err)) {
+        TransferError error{operation, fullPath, {}, err};
+        return handleTransferError(callbacks, result, ignoreAll, error);
+    }
+    if (!info.exists)
+        return true;
+
+    if (info.isDirectory) {
+        auto entries = provMgr.listDir(fullPath, err);
+        if (!err.empty()) {
+            TransferError error{operation, fullPath, {}, err};
+            return handleTransferError(callbacks, result, ignoreAll, error);
+        }
+        for (const auto& entry : entries) {
+            std::string child = joinPath(fullPath, entry.name);
+            if (!deletePathRecursive(provMgr, child, operation, callbacks, result, ignoreAll))
+                return false;
+        }
+    }
+
+    TransferProgress progress;
+    progress.operation = operation;
+    progress.currentPath = fullPath;
+    if (!reportProgress(callbacks, result, progress))
+        return false;
+
+    if (!provMgr.removeAll(fullPath, err)) {
+        TransferError error{operation, fullPath, {}, err};
+        return handleTransferError(callbacks, result, ignoreAll, error);
+    }
+    return true;
+}
+
+bool transferEntryRecursive(ProviderManager& provMgr, const std::string& srcFull,
+                            const std::string& dstFull, TransferOperation operation,
+                            TransferStrategy strategy, const TransferCallbacks& callbacks,
+                            TransferResult& result, bool& ignoreAll, uint64_t& overallDone,
+                            uint64_t overallTotal);
+
+bool transferDirectoryRecursive(ProviderManager& provMgr, const std::string& srcFull,
+                                const std::string& dstFull, TransferOperation operation,
+                                TransferStrategy strategy, const TransferCallbacks& callbacks,
+                                TransferResult& result, bool& ignoreAll, uint64_t& overallDone,
+                                uint64_t overallTotal) {
+    FileStatInfo dstInfo;
+    std::string err;
+    bool dstExists = false;
+    bool dstIsDir = false;
+    if (provMgr.pathExists(dstFull)) {
+        if (!tryStat(provMgr, dstFull, dstInfo, err)) {
+            TransferError error{operation, srcFull, dstFull, err};
+            return handleTransferError(callbacks, result, ignoreAll, error);
+        }
+        dstExists = dstInfo.exists;
+        dstIsDir = dstInfo.isDirectory;
+    }
+
+    if (dstExists && !dstIsDir) {
+        if (strategy == TransferStrategy::Simple) {
+            TransferError error{operation, srcFull, dstFull, "destination already exists"};
+            return handleTransferError(callbacks, result, ignoreAll, error);
+        }
+        if (!deletePathRecursive(provMgr, dstFull, operation, callbacks, result, ignoreAll))
+            return false;
+        dstExists = false;
+    }
+
+    if (!dstExists) {
+        if (!validateDestinationName(dstFull, err)) {
+            TransferError error{operation, srcFull, dstFull, err};
+            return handleTransferError(callbacks, result, ignoreAll, error);
+        }
+        if (!provMgr.createDirectory(dstFull, err)) {
+            TransferError error{operation, srcFull, dstFull, err};
+            return handleTransferError(callbacks, result, ignoreAll, error);
+        }
+    }
+
+    auto entries = provMgr.listDir(srcFull, err);
+    if (!err.empty()) {
+        TransferError error{operation, srcFull, dstFull, err};
+        return handleTransferError(callbacks, result, ignoreAll, error);
+    }
+    for (const auto& entry : entries) {
+        std::string srcChild = joinPath(srcFull, entry.name);
+        std::string dstChild = joinPath(dstFull, entry.name);
+        if (!transferEntryRecursive(provMgr, srcChild, dstChild, operation, strategy,
+                                    callbacks, result, ignoreAll, overallDone, overallTotal))
+            return false;
+    }
+    return true;
+}
+
+bool transferEntryRecursive(ProviderManager& provMgr, const std::string& srcFull,
+                            const std::string& dstFull, TransferOperation operation,
+                            TransferStrategy strategy, const TransferCallbacks& callbacks,
+                            TransferResult& result, bool& ignoreAll, uint64_t& overallDone,
+                            uint64_t overallTotal) {
+    FileStatInfo srcInfo;
+    std::string err;
+    if (!tryStat(provMgr, srcFull, srcInfo, err)) {
+        TransferError error{operation, srcFull, dstFull, err};
+        return handleTransferError(callbacks, result, ignoreAll, error);
+    }
+    if (!srcInfo.exists) {
+        TransferError error{operation, srcFull, dstFull, "source does not exist"};
+        return handleTransferError(callbacks, result, ignoreAll, error);
+    }
+
+    if (srcInfo.isDirectory)
+        return transferDirectoryRecursive(provMgr, srcFull, dstFull, operation, strategy,
+                                          callbacks, result, ignoreAll, overallDone,
+                                          overallTotal);
+
+    if (provMgr.pathExists(dstFull)) {
+        if (strategy == TransferStrategy::Simple) {
+            TransferError error{operation, srcFull, dstFull, "destination already exists"};
+            return handleTransferError(callbacks, result, ignoreAll, error);
+        }
+        if (!deletePathRecursive(provMgr, dstFull, operation, callbacks, result, ignoreAll))
+            return false;
+    }
+
+    std::string srcRel;
+    std::string dstRel;
+    FileProvider* srcProv = provMgr.resolveProvider(srcFull, srcRel);
+    FileProvider* dstProv = provMgr.resolveProvider(dstFull, dstRel);
+    if (!srcProv || !dstProv) {
+        TransferError error{operation, srcFull, dstFull, "unknown provider"};
+        return handleTransferError(callbacks, result, ignoreAll, error);
+    }
+
+    if (!copyFileBuffered(provMgr, srcProv, srcRel, srcFull, dstProv, dstRel, dstFull,
+                          srcInfo.size, operation, callbacks, result, overallDone,
+                          overallTotal)) {
+        if (result.interrupted || result.aborted)
+            return false;
+        TransferError error{operation, srcFull, dstFull,
+                            result.lastError.empty() ? "copy failed" : result.lastError};
+        return handleTransferError(callbacks, result, ignoreAll, error);
+    }
+    return true;
+}
+
+} // namespace
 
 ProviderManager::ProviderManager() {
     // Register local provider by default
@@ -223,6 +780,92 @@ bool ProviderManager::isNetworkPath(const std::string& fullPath) const {
         return p->kind() == ProviderKind::WebDav || p->kind() == ProviderKind::Smb;
     }
     return false;
+}
+
+TransferResult ProviderManager::transferEntries(const std::vector<TransferEntry>& entries,
+                                                TransferOperation operation,
+                                                TransferStrategy strategy,
+                                                const TransferCallbacks& callbacks) {
+    TransferResult result;
+    if (operation != TransferOperation::Copy && operation != TransferOperation::Move) {
+        result.aborted = true;
+        result.lastError = "invalid transfer operation";
+        return result;
+    }
+
+    std::vector<TransferRoot> roots;
+    roots.reserve(entries.size());
+    uint64_t overallTotal = 0;
+    for (const auto& entry : entries) {
+        TransferRoot root;
+        root.srcPath = entry.srcPath;
+        root.dstPath = entry.dstPath;
+        std::string err;
+        if (!scanEntryBytes(*this, entry.srcPath, root.totalBytes, err)) {
+            result.aborted = true;
+            result.lastError = err;
+            return result;
+        }
+        overallTotal += root.totalBytes;
+        roots.push_back(std::move(root));
+    }
+
+    bool ignoreAll = false;
+    uint64_t overallDone = 0;
+    for (const auto& root : roots) {
+        if (result.interrupted || result.aborted)
+            break;
+
+        if (operation == TransferOperation::Move &&
+            strategy == TransferStrategy::Simple &&
+            isSameProvider(root.srcPath, root.dstPath) &&
+            !pathExists(root.dstPath)) {
+            std::string renameErr;
+            if (renamePath(root.srcPath, root.dstPath, renameErr)) {
+                overallDone += root.totalBytes;
+                TransferProgress progress;
+                progress.operation = operation;
+                progress.currentPath = root.srcPath;
+                progress.targetPath = root.dstPath;
+                progress.currentBytes = root.totalBytes;
+                progress.currentTotalBytes = root.totalBytes;
+                progress.overallBytes = overallDone;
+                progress.overallTotalBytes = overallTotal;
+                if (!reportProgress(callbacks, result, progress))
+                    break;
+                continue;
+            }
+        }
+
+        if (!transferEntryRecursive(*this, root.srcPath, root.dstPath, operation, strategy,
+                                    callbacks, result, ignoreAll, overallDone,
+                                    overallTotal)) {
+            if (result.interrupted || result.aborted)
+                break;
+        }
+
+        if (operation == TransferOperation::Move &&
+            !result.interrupted && !result.aborted) {
+            if (!deletePathRecursive(*this, root.srcPath, TransferOperation::Move, callbacks,
+                                     result, ignoreAll))
+                break;
+        }
+    }
+
+    return result;
+}
+
+TransferResult ProviderManager::deleteEntries(const std::vector<std::string>& paths,
+                                              const TransferCallbacks& callbacks) {
+    TransferResult result;
+    bool ignoreAll = false;
+    for (const auto& path : paths) {
+        if (!deletePathRecursive(*this, path, TransferOperation::Delete, callbacks,
+                                 result, ignoreAll)) {
+            break;
+        }
+    }
+    return result;
 }
 
 // --- Cross-provider copy ---

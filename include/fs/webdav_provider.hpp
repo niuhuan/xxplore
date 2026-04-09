@@ -1,5 +1,6 @@
 #pragma once
 #include "fs/file_provider.hpp"
+#include <functional>
 #include <string>
 
 namespace xplore {
@@ -8,6 +9,10 @@ namespace fs {
 /// WebDAV network file system provider using libcurl.
 class WebDavProvider : public FileProvider {
 public:
+    using StreamReadFn = std::function<bool(void* outBuffer, size_t size, uint64_t offset,
+                                            std::string& errOut)>;
+    using StreamProgressFn = std::function<bool(uint64_t bytesSent)>;
+
     /// @param id     Unique provider id (e.g. "webdav-abc123")
     /// @param name   Display name (e.g. "MyNAS")
     /// @param url    Base URL (e.g. "http://192.168.1.1/dav")
@@ -37,6 +42,9 @@ public:
                             const std::string& dstPath, uint64_t size,
                             std::string& errOut,
                             const ProviderProgressCb& cb = nullptr);
+    bool uploadFromStream(const std::string& dstPath, uint64_t size,
+                          const StreamReadFn& readFn, std::string& errOut,
+                          const StreamProgressFn& progressCb = nullptr);
 
     /// Test connectivity (PROPFIND on root). Returns true if successful.
     bool testConnection(std::string& errOut);
@@ -64,6 +72,9 @@ private:
     CurlResult performStreamPut(const std::string& url, FileProvider* srcProv,
                                 const std::string& srcPath, uint64_t size,
                                 const ProviderProgressCb& cb);
+    CurlResult performStreamPut(const std::string& url, uint64_t size,
+                                const StreamReadFn& readFn,
+                                const StreamProgressFn& progressCb);
 
     /// Parse PROPFIND XML response into entries.
     std::vector<FileEntry> parsePropfindResponse(const std::string& xml,

@@ -1,4 +1,5 @@
 #pragma once
+#include "ui/touch_event.hpp"
 #include "util/websocket_installer_server.hpp"
 #include <cstdint>
 
@@ -18,7 +19,7 @@ public:
     void close();
 
     bool isOpen() const { return open_; }
-    WebSocketInstallerAction handleInput(uint64_t kDown);
+    WebSocketInstallerAction handleInput(uint64_t kDown, const TouchTap* tap = nullptr);
     void render(Renderer& renderer, FontManager& fm, const I18n& i18n) const;
 
 private:

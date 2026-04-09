@@ -1,3 +1,4 @@
+#include "fs/fs_api.hpp"
 #include "ui/modals.hpp"
 #include "ui/renderer.hpp"
 #include "ui/font_manager.hpp"
@@ -189,12 +190,16 @@ void ModalProgress::open(std::string t, std::string d) {
     active = true;
     title  = std::move(t);
     detail = std::move(d);
+    progressCurrent = 0;
+    progressTotal = 0;
 }
 
 void ModalProgress::close() {
     active = false;
     title.clear();
     detail.clear();
+    progressCurrent = 0;
+    progressTotal = 0;
 }
 
 void ModalProgress::render(Renderer& renderer, FontManager& fm, const I18n& i18n) {
@@ -202,8 +207,8 @@ void ModalProgress::render(Renderer& renderer, FontManager& fm, const I18n& i18n
     using namespace theme;
 
     int cx = (SCREEN_W - kCardW) / 2;
-    int cy = (SCREEN_H - 160) / 2;
-    int h  = 160;
+    int cy = (SCREEN_H - 210) / 2;
+    int h  = 210;
 
     renderer.drawRoundedRectFilled(cx, cy, kCardW, h, MENU_RADIUS, MENU_BG);
     renderer.drawRoundedRect(cx, cy, kCardW, h, MENU_RADIUS, MENU_BORDER);
@@ -214,9 +219,145 @@ void ModalProgress::render(Renderer& renderer, FontManager& fm, const I18n& i18n
     ty += FONT_SIZE_ITEM + 10;
     fm.drawTextEllipsis(renderer.sdl(), detail.c_str(), tx, ty, FONT_SIZE_SMALL, TEXT_SECONDARY,
                         kCardW - kPad * 2);
-    ty += FONT_SIZE_SMALL + 14;
+    ty += FONT_SIZE_SMALL + 16;
+
+    if (progressTotal > 0) {
+        constexpr int kBarH = 18;
+        int barW = kCardW - kPad * 2;
+        renderer.drawRoundedRectFilled(tx, ty, barW, kBarH, 8, SURFACE);
+        renderer.drawRoundedRect(tx, ty, barW, kBarH, 8, DIVIDER);
+        int fillW = static_cast<int>((static_cast<double>(progressCurrent) /
+                                      static_cast<double>(progressTotal)) * barW);
+        if (fillW < 0)
+            fillW = 0;
+        if (fillW > barW)
+            fillW = barW;
+        if (fillW > 0)
+            renderer.drawRoundedRectFilled(tx, ty, fillW, kBarH, 8, PRIMARY);
+
+        char percentBuf[32];
+        int percent = static_cast<int>((progressCurrent * 100ULL) / progressTotal);
+        std::snprintf(percentBuf, sizeof(percentBuf), "%d%%", percent);
+        std::string bytes = fs::formatSize(progressCurrent);
+        bytes += " / ";
+        bytes += fs::formatSize(progressTotal);
+        int percentY = ty + kBarH + 10;
+        fm.drawText(renderer.sdl(), bytes.c_str(), tx, percentY, FONT_SIZE_SMALL,
+                    TEXT_SECONDARY);
+        int percentW = fm.measureText(percentBuf, FONT_SIZE_SMALL);
+        fm.drawText(renderer.sdl(), percentBuf, tx + barW - percentW, percentY,
+                    FONT_SIZE_SMALL, TEXT_SECONDARY);
+        ty = percentY + FONT_SIZE_SMALL + 14;
+    }
+
     const char* hint = i18n.t("modal.interrupt_hint");
     fm.drawText(renderer.sdl(), hint, tx, ty, FONT_SIZE_SMALL, TEXT_DISABLED);
+}
+
+// ---- ModalErrorAction ----
+
+void ModalErrorAction::open(std::string t, std::string b, std::string d) {
+    active = true;
+    title = std::move(t);
+    body = std::move(b);
+    detail = std::move(d);
+    focus = 0;
+}
+
+void ModalErrorAction::close() {
+    active = false;
+    title.clear();
+    body.clear();
+    detail.clear();
+}
+
+ErrorActionResult ModalErrorAction::handleInput(uint64_t kDown, const TouchTap* tap) {
+    if (!active) return ErrorActionResult::None;
+    int cardW = 760;
+    int cardH = 250;
+    int cx = (theme::SCREEN_W - cardW) / 2;
+    int cy = (theme::SCREEN_H - cardH) / 2;
+    int btnY = cy + cardH - 56;
+    const int hitW = 160;
+    const int gap = 24;
+    int total = hitW * 3 + gap * 2;
+    int bx = cx + (cardW - total) / 2;
+    if (tap && tap->active) {
+        for (int i = 0; i < 3; ++i) {
+            if (!pointInRect(tap, bx + i * (hitW + gap), btnY - 8, hitW, 36))
+                continue;
+            focus = i;
+            switch (i) {
+            case 0: return ErrorActionResult::Abort;
+            case 1: return ErrorActionResult::Ignore;
+            default: return ErrorActionResult::IgnoreAll;
+            }
+        }
+    }
+    if (kDown & HidNpadButton_B)
+        return ErrorActionResult::Abort;
+    if (kDown & HidNpadButton_A) {
+        switch (focus) {
+        case 0: return ErrorActionResult::Abort;
+        case 1: return ErrorActionResult::Ignore;
+        case 2: return ErrorActionResult::IgnoreAll;
+        }
+    }
+    if (kDown & HidNpadButton_AnyLeft) {
+        focus--;
+        if (focus < 0) focus = 2;
+    }
+    if (kDown & HidNpadButton_AnyRight) {
+        focus++;
+        if (focus > 2) focus = 0;
+    }
+    return ErrorActionResult::None;
+}
+
+void ModalErrorAction::render(Renderer& renderer, FontManager& fm, const I18n& i18n) {
+    if (!active) return;
+    using namespace theme;
+
+    int cardW = 760;
+    int cardH = 250;
+    int cx = (SCREEN_W - cardW) / 2;
+    int cy = (SCREEN_H - cardH) / 2;
+
+    renderer.drawRoundedRectFilled(cx, cy, cardW, cardH, MENU_RADIUS, MENU_BG);
+    renderer.drawRoundedRect(cx, cy, cardW, cardH, MENU_RADIUS, MENU_BORDER);
+
+    int tx = cx + kPad;
+    int ty = cy + kPad;
+    fm.drawText(renderer.sdl(), title.c_str(), tx, ty, FONT_SIZE_ITEM, TEXT);
+    ty += FONT_SIZE_ITEM + 12;
+    fm.drawTextEllipsis(renderer.sdl(), body.c_str(), tx, ty, FONT_SIZE_SMALL, TEXT_SECONDARY,
+                        cardW - kPad * 2);
+    ty += FONT_SIZE_SMALL + 10;
+    fm.drawTextEllipsis(renderer.sdl(), detail.c_str(), tx, ty, FONT_SIZE_SMALL, DANGER,
+                        cardW - kPad * 2);
+
+    const char* labels[3] = {
+        i18n.t("modal.abort"),
+        i18n.t("modal.ignore"),
+        i18n.t("modal.ignore_all"),
+    };
+    int btnY = cy + cardH - 56;
+    int gap = 30;
+    int ws[3];
+    int total = 0;
+    for (int i = 0; i < 3; ++i) {
+        ws[i] = fm.measureText(labels[i], FONT_SIZE_ITEM);
+        total += ws[i];
+    }
+    total += gap * 2;
+    int bx = cx + (cardW - total) / 2;
+    for (int i = 0; i < 3; ++i) {
+        SDL_Color col = (focus == i) ? PRIMARY : TEXT_SECONDARY;
+        if (i == 0 && focus != i)
+            col = DANGER;
+        fm.drawText(renderer.sdl(), labels[i], bx, btnY, FONT_SIZE_ITEM, col);
+        bx += ws[i] + gap;
+    }
 }
 
 // ---- ModalInfo ----
