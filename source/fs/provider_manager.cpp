@@ -793,51 +793,34 @@ TransferResult ProviderManager::transferEntries(const std::vector<TransferEntry>
         return result;
     }
 
-    std::vector<TransferRoot> roots;
-    roots.reserve(entries.size());
-    uint64_t overallTotal = 0;
-    for (const auto& entry : entries) {
-        TransferRoot root;
-        root.srcPath = entry.srcPath;
-        root.dstPath = entry.dstPath;
-        std::string err;
-        if (!scanEntryBytes(*this, entry.srcPath, root.totalBytes, err)) {
-            result.aborted = true;
-            result.lastError = err;
-            return result;
-        }
-        overallTotal += root.totalBytes;
-        roots.push_back(std::move(root));
-    }
-
     bool ignoreAll = false;
     uint64_t overallDone = 0;
-    for (const auto& root : roots) {
+    uint64_t overallTotal = 0;
+    for (const auto& entry : entries) {
         if (result.interrupted || result.aborted)
             break;
 
         if (operation == TransferOperation::Move &&
             strategy == TransferStrategy::Simple &&
-            isSameProvider(root.srcPath, root.dstPath) &&
-            !pathExists(root.dstPath)) {
+            isSameProvider(entry.srcPath, entry.dstPath) &&
+            !pathExists(entry.dstPath)) {
             std::string renameErr;
-            if (renamePath(root.srcPath, root.dstPath, renameErr)) {
-                overallDone += root.totalBytes;
+            if (renamePath(entry.srcPath, entry.dstPath, renameErr)) {
                 TransferProgress progress;
                 progress.operation = operation;
-                progress.currentPath = root.srcPath;
-                progress.targetPath = root.dstPath;
-                progress.currentBytes = root.totalBytes;
-                progress.currentTotalBytes = root.totalBytes;
-                progress.overallBytes = overallDone;
-                progress.overallTotalBytes = overallTotal;
+                progress.currentPath = entry.srcPath;
+                progress.targetPath = entry.dstPath;
+                progress.currentBytes = 0;
+                progress.currentTotalBytes = 0;
+                progress.overallBytes = 0;
+                progress.overallTotalBytes = 0;
                 if (!reportProgress(callbacks, result, progress))
                     break;
                 continue;
             }
         }
 
-        if (!transferEntryRecursive(*this, root.srcPath, root.dstPath, operation, strategy,
+        if (!transferEntryRecursive(*this, entry.srcPath, entry.dstPath, operation, strategy,
                                     callbacks, result, ignoreAll, overallDone,
                                     overallTotal)) {
             if (result.interrupted || result.aborted)
@@ -846,7 +829,7 @@ TransferResult ProviderManager::transferEntries(const std::vector<TransferEntry>
 
         if (operation == TransferOperation::Move &&
             !result.interrupted && !result.aborted) {
-            if (!deletePathRecursive(*this, root.srcPath, TransferOperation::Move, callbacks,
+            if (!deletePathRecursive(*this, entry.srcPath, TransferOperation::Move, callbacks,
                                      result, ignoreAll))
                 break;
         }

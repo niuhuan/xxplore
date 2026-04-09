@@ -930,10 +930,18 @@ public:
                   std::shared_ptr<nxncm::ContentStorage>& storage)
         : NcaBodyWriter(ncaId, placeholderId, offset, storage) {
         dctx = ZSTD_createDCtx();
+        if (!dctx)
+            XP_THROW("Failed to create ZSTD decompressor");
     }
 
     ~NczBodyWriter() override {
-        close();
+        try {
+            close();
+        } catch (const std::exception& e) {
+            debugPrint("ncz", "close suppressed during destruction: %s", e.what());
+        } catch (...) {
+            debugPrint("ncz", "close suppressed during destruction: unknown error");
+        }
         for (auto* section : sections)
             delete section;
         ZSTD_freeDCtx(dctx);
@@ -941,16 +949,20 @@ public:
 
     u64 write(const u8* ptr, u64 size) override {
         while (!sectionsInitialized) {
-            if (buffer.empty() && size >= sizeof(u64) * 2) {
-                append(buffer, ptr, sizeof(u64) * 2);
-                ptr += sizeof(u64) * 2;
-                size -= sizeof(u64) * 2;
+            if (buffer.size() < sizeof(u64) * 2) {
+                size_t need = sizeof(u64) * 2 - buffer.size();
+                size_t take = std::min<u64>(need, size);
+                append(buffer, ptr, take);
+                ptr += take;
+                size -= take;
             }
 
             if (buffer.size() < sizeof(u64) * 2)
                 return 0;
 
             auto* header = reinterpret_cast<NczHeader*>(buffer.data());
+            if (!header->isValid())
+                XP_THROW("Invalid NCZ header");
             size_t headerSize = static_cast<size_t>(header->size());
             size_t remainder = headerSize > buffer.size() ? headerSize - buffer.size() : 0;
             size_t copySize = std::min<u64>(remainder, size);
@@ -958,6 +970,7 @@ public:
             ptr += copySize;
             size -= copySize;
 
+            header = reinterpret_cast<NczHeader*>(buffer.data());
             if (buffer.size() == headerSize) {
                 for (u64 i = 0; i < header->sectionCount(); i++)
                     sections.push_back(new SectionContext(header->section(i)));
@@ -982,9 +995,16 @@ public:
     }
 
     bool close() {
+        if (closed)
+            return true;
+        closed = true;
+
+        if (!sectionsInitialized && !buffer.empty())
+            XP_THROW("Incomplete NCZ header");
         if (!buffer.empty())
             processChunk(buffer.data(), buffer.size());
-        encrypt(deflateBuffer.data(), deflateBuffer.size(), currentOffset);
+        if (!deflateBuffer.empty())
+            encrypt(deflateBuffer.data(), deflateBuffer.size(), currentOffset);
         flush();
         return true;
     }
@@ -1050,6 +1070,8 @@ private:
     }
 
     SectionContext& section(u64 offset) {
+        if (sections.empty())
+            XP_THROW("NCZ section table is empty");
         for (auto* item : sections) {
             if (offset >= item->offset && offset < item->offset + item->size)
                 return *item;
@@ -1111,6 +1133,7 @@ private:
     std::vector<u8> buffer;
     std::vector<u8> deflateBuffer;
     bool sectionsInitialized = false;
+    bool closed = false;
     std::vector<SectionContext*> sections;
 };
 

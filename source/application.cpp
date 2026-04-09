@@ -23,6 +23,7 @@
 #include "ui/toast.hpp"
 #include "ui/websocket_installer_screen.hpp"
 #include "util/app_config.hpp"
+#include "util/screen_awake.hpp"
 
 #include <algorithm>
 #include <cstdio>
@@ -1125,7 +1126,7 @@ int Application::run(int argc, char* argv[]) {
         callbacks.onProgress = [&](const fs::TransferProgress& progress) -> bool {
             (void)op;
             modalProgress.setDetail(progress.currentPath);
-            modalProgress.setProgress(progress.overallBytes, progress.overallTotalBytes);
+            modalProgress.setProgress(progress.currentBytes, progress.currentTotalBytes);
             return pumpProgress();
         };
         callbacks.onError = [&](const fs::TransferError& error) -> fs::TransferDecision {
@@ -1335,9 +1336,11 @@ int Application::run(int argc, char* argv[]) {
                     pendingConfirm = PendingConfirm::None;
                     interrupted = false;
                     modalProgress.open(i18n.t("progress.deleting"), "");
+                    util::acquireScreenAwake();
                     fs::TransferResult deleteResult = provMgr.deleteEntries(
                         pendingDeletePaths,
                         makeTransferCallbacks(fs::TransferOperation::Delete));
+                    util::releaseScreenAwake();
                     modalProgress.close();
                     refreshPath(savedDeleteDir, savedDeleteCursor);
                     pendingDeletePaths.clear();
@@ -1435,11 +1438,13 @@ int Application::run(int argc, char* argv[]) {
                     fs::TransferStrategy strategy = ch == ChoiceResult::Merge
                         ? fs::TransferStrategy::Merge
                         : fs::TransferStrategy::Overwrite;
+                    util::acquireScreenAwake();
                     fs::TransferResult transferResult = provMgr.transferEntries(
                         transferEntries,
                         isCut ? fs::TransferOperation::Move : fs::TransferOperation::Copy,
                         strategy, makeTransferCallbacks(isCut ? fs::TransferOperation::Move
                                                               : fs::TransferOperation::Copy));
+                    util::releaseScreenAwake();
                     modalProgress.close();
                     clipboard.clear();
                     activeList.clearSelection();
@@ -1787,12 +1792,14 @@ int Application::run(int argc, char* argv[]) {
                     transferEntries.reserve(clipboard.items().size());
                     for (const auto& e : clipboard.items())
                         transferEntries.push_back({e.fullPath, fs::joinPath(destDir, e.name)});
+                    util::acquireScreenAwake();
                     fs::TransferResult transferResult = provMgr.transferEntries(
                         transferEntries,
                         isCut ? fs::TransferOperation::Move : fs::TransferOperation::Copy,
                         fs::TransferStrategy::Simple,
                         makeTransferCallbacks(isCut ? fs::TransferOperation::Move
                                                     : fs::TransferOperation::Copy));
+                    util::releaseScreenAwake();
                     modalProgress.close();
                     clipboard.clear();
                     activeList.clearSelection();
