@@ -1,4 +1,4 @@
-# Xplore
+# Xxplore
 
 A professional file manager and software installer for Nintendo Switch.
 
@@ -47,7 +47,7 @@ Install:
 # 2. Install Python dependencies (first time only)
 uv pip install fonttools brotli
 
-# 3. Generate the subset font -> romfs/fonts/xplore.ttf
+# 3. Generate the subset font -> romfs/fonts/xxplore.ttf
 uv run python scripts/subset_font.py
 
 # 4. Build
@@ -57,28 +57,28 @@ make DEFINES=-DXPLORE_DEBUG
 make DEFINES=-DXPLORE_DEBUG dist
 ```
 
-The generated `xplore.nro` can then be launched from hbmenu.
+The generated `xxplore.nro` can then be launched from hbmenu.
 
-`make dist` creates `dist/switch/`, copies `xplore.nro` into it, and also copies `scripts/cjk.ttf` renamed as `xplore.ttf` for external font loading.
+`make dist` creates `dist/switch/`, copies `xxplore.nro` into it, and also copies `scripts/cjk.ttf` renamed as `xxplore.ttf` for external font loading.
 
 ## External Font
 
-Xplore checks for an external `.ttf` next to the running `.nro`.
+Xxplore checks for an external `.ttf` next to the running `.nro`.
 
 Example:
 
 ```text
-sdmc:/switch/xplore/xplore.nro
-sdmc:/switch/xplore/xplore.ttf
+sdmc:/switch/xxplore/xxplore.nro
+sdmc:/switch/xxplore/xxplore.ttf
 ```
 
-If `xplore.ttf` exists, Xplore uses that font for all UI text. There is no fallback mixing with the built-in font. If it does not exist, Xplore uses `romfs:/fonts/xplore.ttf`.
+If `xxplore.ttf` exists, Xxplore uses that font for all UI text. There is no fallback mixing with the built-in font. If it does not exist, Xxplore uses `romfs:/fonts/xxplore.ttf`.
 
 This is useful when the built-in subset font is missing characters you need.
 
 ### SMB2 Support
 
-SMB2 network drive support requires [libsmb2](https://github.com/sahlberg/libsmb2). Xplore links against it directly.
+SMB2 network drive support requires [libsmb2](https://github.com/sahlberg/libsmb2). Xxplore links against it directly.
 
 ```bash
 # Clone libsmb2
@@ -89,7 +89,7 @@ cd libsmb2
 sudo make -f Makefile.platform switch_install
 ```
 
-After installation, rebuild Xplore.
+After installation, rebuild Xxplore.
 
 ### Debug Mode
 

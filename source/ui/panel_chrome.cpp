@@ -4,7 +4,7 @@
 #include "ui/renderer.hpp"
 #include "ui/theme.hpp"
 
-namespace xplore::ui {
+namespace xxplore::ui {
 
 namespace {
 
@@ -45,4 +45,4 @@ bool panelCloseButtonHit(int cardX, int cardY, int cardW, int tapX, int tapY) {
            tapY >= btnY && tapY < btnY + kPanelCloseButtonSize;
 }
 
-} // namespace xplore::ui
+} // namespace xxplore::ui

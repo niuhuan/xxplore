@@ -2,7 +2,7 @@
 #include <cstdint>
 #include <string>
 
-namespace xplore {
+namespace xxplore {
 
 class Renderer;
 class FontManager;
@@ -41,4 +41,4 @@ private:
     int         dotCount_  = 0;
 };
 
-} // namespace xplore
+} // namespace xxplore

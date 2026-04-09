@@ -3,7 +3,7 @@
 #include "ui/font_manager.hpp"
 #include "ui/theme.hpp"
 
-namespace xplore {
+namespace xxplore {
 
 FileList::~FileList() {
     destroyCache();
@@ -233,4 +233,4 @@ void FileList::destroyCache() {
     cacheH = 0;
 }
 
-} // namespace xplore
+} // namespace xxplore

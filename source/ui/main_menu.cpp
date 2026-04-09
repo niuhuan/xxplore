@@ -8,7 +8,7 @@
 #include <cstdio>
 #include <cstring>
 
-namespace xplore {
+namespace xxplore {
 
 static float easeOutCubic(float t) {
     float u = 1.0f - t;
@@ -316,4 +316,4 @@ void BottomMainMenu::render(Renderer& renderer, FontManager& fm, const I18n& i18
     }
 }
 
-} // namespace xplore
+} // namespace xxplore

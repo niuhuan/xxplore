@@ -9,7 +9,7 @@
 #include <string>
 #include <switch.h>
 
-namespace xplore {
+namespace xxplore {
 
 namespace {
 
@@ -351,4 +351,4 @@ void SettingsScreen::render(Renderer& renderer, FontManager& fm, const I18n& i18
     }
 }
 
-} // namespace xplore
+} // namespace xxplore

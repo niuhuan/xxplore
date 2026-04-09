@@ -3,7 +3,7 @@
 #include <switch.h>
 #include <switch/applets/swkbd.h>
 
-namespace xplore {
+namespace xxplore {
 
 bool swkbdTextInput(const char* headerText, const char* guideText, const char* initialText,
                     char* out, size_t outLen) {
@@ -27,4 +27,4 @@ bool swkbdTextInput(const char* headerText, const char* guideText, const char* i
     return R_SUCCEEDED(rc);
 }
 
-} // namespace xplore
+} // namespace xxplore

@@ -2,7 +2,7 @@
 #include <string>
 #include <vector>
 
-namespace xplore::config {
+namespace xxplore::config {
 
 enum class AppLanguage {
     ZhCn,
@@ -46,4 +46,4 @@ const char* networkDriveTypeId(NetworkDriveType type);
 bool parseNetworkDriveTypeId(const char* id, NetworkDriveType& out);
 std::string generateDriveId();
 
-} // namespace xplore::config
+} // namespace xxplore::config

@@ -6,7 +6,7 @@
 #include <usbhsfs.h>
 #include <vector>
 
-namespace xplore::fs {
+namespace xxplore::fs {
 
 struct UsbDriveInfo {
     std::string providerId;
@@ -46,4 +46,4 @@ private:
     UEvent*                  exitEvent_ = nullptr;
 };
 
-} // namespace xplore::fs
+} // namespace xxplore::fs

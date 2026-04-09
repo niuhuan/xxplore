@@ -6,7 +6,7 @@
 #include <json-c/json.h>
 #include <json-c/json_tokener.h>
 
-namespace xplore::config {
+namespace xxplore::config {
 
 namespace {
 
@@ -247,4 +247,4 @@ bool saveConfig(const std::string& path, const AppConfig& config, std::string& e
     return ok;
 }
 
-} // namespace xplore::config
+} // namespace xxplore::config

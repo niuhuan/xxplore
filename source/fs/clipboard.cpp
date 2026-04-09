@@ -1,6 +1,6 @@
 #include "fs/clipboard.hpp"
 
-namespace xplore {
+namespace xxplore {
 namespace fs {
 
 namespace {
@@ -51,4 +51,4 @@ bool clipboardPasteDestinationAllowed(const Clipboard& clip, const std::string& 
 }
 
 } // namespace fs
-} // namespace xplore
+} // namespace xxplore

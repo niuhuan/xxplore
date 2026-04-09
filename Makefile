@@ -18,9 +18,11 @@ DATA		:=	data
 INCLUDES	:=	include include/ui include/fs include/i18n include/install include/util
 ROMFS	:=	romfs
 
-APP_TITLE	:=	Xplore
+APP_TITLE	:=	Xxplore
 APP_AUTHOR	:=	niuhuan
 APP_VERSION	:=	0.1.0
+
+BIN_BASE	:=	xxplore
 
 #---------------------------------------------------------------------------------
 # options for code generation
@@ -69,7 +71,7 @@ LIBDIRS	:= $(PORTLIBS) $(LIBNX)
 ifneq ($(BUILD),$(notdir $(CURDIR)))
 #---------------------------------------------------------------------------------
 
-export OUTPUT	:=	$(CURDIR)/$(TARGET)
+export OUTPUT	:=	$(CURDIR)/$(BIN_BASE)
 export TOPDIR	:=	$(CURDIR)
 
 export VPATH	:=	$(foreach dir,$(SOURCES),$(CURDIR)/$(dir)) \
@@ -109,8 +111,8 @@ export LIBPATHS	:=	$(foreach dir,$(LIBDIRS),-L$(dir)/lib)
 
 ifeq ($(strip $(CONFIG_JSON)),)
 	jsons := $(wildcard *.json)
-	ifneq (,$(findstring $(TARGET).json,$(jsons)))
-		export APP_JSON := $(TOPDIR)/$(TARGET).json
+	ifneq (,$(findstring $(BIN_BASE).json,$(jsons)))
+		export APP_JSON := $(TOPDIR)/$(BIN_BASE).json
 	else
 		ifneq (,$(findstring config.json,$(jsons)))
 			export APP_JSON := $(TOPDIR)/config.json
@@ -122,8 +124,8 @@ endif
 
 ifeq ($(strip $(ICON)),)
 	icons := $(wildcard *.jpg)
-	ifneq (,$(findstring $(TARGET).jpg,$(icons)))
-		export APP_ICON := $(TOPDIR)/$(TARGET).jpg
+	ifneq (,$(findstring $(BIN_BASE).jpg,$(icons)))
+		export APP_ICON := $(TOPDIR)/$(BIN_BASE).jpg
 	else
 		ifneq (,$(findstring icon.jpg,$(icons)))
 			export APP_ICON := $(TOPDIR)/icon.jpg
@@ -138,7 +140,7 @@ ifeq ($(strip $(NO_ICON)),)
 endif
 
 ifeq ($(strip $(NO_NACP)),)
-	export NROFLAGS += --nacp=$(CURDIR)/$(TARGET).nacp
+	export NROFLAGS += --nacp=$(CURDIR)/$(BIN_BASE).nacp
 endif
 
 ifneq ($(APP_TITLEID),)
@@ -161,17 +163,17 @@ $(BUILD):
 dist: all
 	@echo dist ...
 	@rm -fr $(DIST)
-	@mkdir -p $(DIST)/switch/xplore
-	@cp $(TARGET).nro $(DIST)/switch/xplore/$(TARGET).nro
-	@cp scripts/cjk.ttf $(DIST)/switch/xplore/$(TARGET).ttf
+	@mkdir -p $(DIST)/switch/xxplore
+	@cp $(BIN_BASE).nro $(DIST)/switch/xxplore/$(BIN_BASE).nro
+	@cp scripts/cjk.ttf $(DIST)/switch/xxplore/$(BIN_BASE).ttf
 
 #---------------------------------------------------------------------------------
 clean:
 	@echo clean ...
 ifeq ($(strip $(APP_JSON)),)
-	@rm -fr $(BUILD) $(DIST) $(TARGET).nro $(TARGET).nacp $(TARGET).elf
+	@rm -fr $(BUILD) $(DIST) $(BIN_BASE).nro $(BIN_BASE).nacp $(BIN_BASE).elf
 else
-	@rm -fr $(BUILD) $(DIST) $(TARGET).nsp $(TARGET).nso $(TARGET).npdm $(TARGET).elf
+	@rm -fr $(BUILD) $(DIST) $(BIN_BASE).nsp $(BIN_BASE).nso $(BIN_BASE).npdm $(BIN_BASE).elf
 endif
 
 

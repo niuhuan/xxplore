@@ -7,7 +7,7 @@
 #include <string>
 #include <sys/stat.h>
 
-namespace xplore {
+namespace xxplore {
 namespace fs {
 
 namespace {
@@ -381,4 +381,4 @@ bool probeImageInfo(const std::string& path, ImageInfo& out, std::string& errOut
 }
 
 } // namespace fs
-} // namespace xplore
+} // namespace xxplore

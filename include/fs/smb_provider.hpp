@@ -6,7 +6,7 @@
 // Forward declare libsmb2 types
 struct smb2_context;
 
-namespace xplore {
+namespace xxplore {
 namespace fs {
 
 /// SMB2 network file system provider using libsmb2.
@@ -79,4 +79,4 @@ private:
 };
 
 } // namespace fs
-} // namespace xplore
+} // namespace xxplore

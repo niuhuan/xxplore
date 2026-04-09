@@ -4,7 +4,7 @@ ums*: 表示 USB 存储设备
 名称(WebDAV): 表示 WebDAV 驱动器
 名称(SMB): 表示 Samba/SMB 驱动器
 
-在应用程序模式下运行 Xplore,
+在应用程序模式下运行 Xxplore,
 可以查看更大尺寸的图片,
 也可以使用更大的安装缓存。
 

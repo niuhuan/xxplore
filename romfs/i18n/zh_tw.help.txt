@@ -4,7 +4,7 @@ ums*: 表示 USB 儲存裝置
 名稱(WebDAV): 表示 WebDAV 磁碟
 名稱(SMB): 表示 Samba/SMB 磁碟
 
-在應用程式模式下執行 Xplore，
+在應用程式模式下執行 Xxplore，
 可以檢視更大尺寸的圖片，
 也可以使用更大的安裝快取。
 

@@ -4,7 +4,7 @@
 #include <cstdio>
 #include <cstring>
 
-namespace xplore::fs {
+namespace xxplore::fs {
 
 namespace {
 
@@ -171,4 +171,4 @@ void UsbDriveManager::workerMain() {
     }
 }
 
-} // namespace xplore::fs
+} // namespace xxplore::fs

@@ -4,7 +4,7 @@
 #include <SDL_image.h>
 #include <switch.h>
 
-namespace xplore {
+namespace xxplore {
 
 ImageViewer::~ImageViewer() {
     close();
@@ -83,4 +83,4 @@ void ImageViewer::render(Renderer& renderer) const {
     renderer.drawRect(drawX - 1, drawY - 1, drawW + 2, drawH + 2, theme::DIVIDER);
 }
 
-} // namespace xplore
+} // namespace xxplore

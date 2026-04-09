@@ -9,7 +9,7 @@
 #include <unordered_map>
 #include <vector>
 
-namespace xplore {
+namespace xxplore {
 
 enum class WebInstallTarget { Nand, SdCard };
 
@@ -115,4 +115,4 @@ private:
     uint32_t nextReqId_ = 1;
 };
 
-} // namespace xplore
+} // namespace xxplore

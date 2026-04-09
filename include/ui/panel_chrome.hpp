@@ -2,7 +2,7 @@
 
 #include <SDL.h>
 
-namespace xplore {
+namespace xxplore {
 
 class Renderer;
 class FontManager;
@@ -19,4 +19,4 @@ void drawPanelTitleBar(Renderer& renderer, FontManager& fm, int x, int y, int w,
 bool panelCloseButtonHit(int cardX, int cardY, int cardW, int tapX, int tapY);
 
 } // namespace ui
-} // namespace xplore
+} // namespace xxplore

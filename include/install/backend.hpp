@@ -5,7 +5,7 @@
 #include <string>
 #include <vector>
 
-namespace xplore {
+namespace xxplore {
 
 struct InstallQueueItem;
 
@@ -25,4 +25,4 @@ bool runInstallQueue(const std::vector<InstallQueueItem>& items, bool installToN
                      std::string& errOut,
                      const InstallDataSourceCallbacks* sourceCallbacks = nullptr);
 
-} // namespace xplore
+} // namespace xxplore

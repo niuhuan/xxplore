@@ -1,7 +1,7 @@
 #pragma once
 #include "fs/file_provider.hpp"
 
-namespace xplore::fs {
+namespace xxplore::fs {
 
 /// FileProvider backed by a libusbhsfs-mounted devoptab prefix (e.g. "ums0:").
 class UsbMountProvider : public FileProvider {
@@ -47,4 +47,4 @@ private:
     bool        readOnly_ = false;
 };
 
-} // namespace xplore::fs
+} // namespace xxplore::fs

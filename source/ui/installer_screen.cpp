@@ -10,7 +10,7 @@
 #include <cstdio>
 #include <switch.h>
 
-namespace xplore {
+namespace xxplore {
 
 namespace {
 
@@ -562,4 +562,4 @@ void InstallerScreen::render(Renderer& renderer, FontManager& fm, const I18n& i1
     }
 }
 
-} // namespace xplore
+} // namespace xxplore

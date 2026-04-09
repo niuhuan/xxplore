@@ -3,7 +3,7 @@
 #include <functional>
 #include <string>
 
-namespace xplore {
+namespace xxplore {
 namespace fs {
 
 /// WebDAV network file system provider using libcurl.
@@ -82,4 +82,4 @@ private:
 };
 
 } // namespace fs
-} // namespace xplore
+} // namespace xxplore

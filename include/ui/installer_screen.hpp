@@ -10,7 +10,7 @@
 
 #include "install/backend.hpp"
 
-namespace xplore {
+namespace xxplore {
 
 class Renderer;
 class FontManager;
@@ -73,4 +73,4 @@ private:
     std::thread              worker_;
 };
 
-} // namespace xplore
+} // namespace xxplore

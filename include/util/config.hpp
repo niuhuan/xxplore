@@ -4,7 +4,7 @@
 
 namespace inst::config {
 
-inline const std::string appDir = "sdmc:/switch/Xplore";
+inline const std::string appDir = "sdmc:/switch/Xxplore";
 inline const std::string configPath = appDir + "/config.json";
 inline const std::string appVersion = "0.1.0";
 

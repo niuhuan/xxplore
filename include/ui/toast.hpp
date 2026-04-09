@@ -2,7 +2,7 @@
 #include <SDL.h>
 #include <string>
 
-namespace xplore {
+namespace xxplore {
 
 enum class ToastKind {
     Error,
@@ -35,4 +35,4 @@ private:
     uint32_t remainingMs = 0;
 };
 
-} // namespace xplore
+} // namespace xxplore

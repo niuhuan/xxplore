@@ -5,7 +5,7 @@
 #include <string>
 #include <vector>
 
-namespace xplore {
+namespace xxplore {
 
 class Renderer;
 class FontManager;
@@ -83,4 +83,4 @@ private:
     int  cacheH  = 0;
 };
 
-} // namespace xplore
+} // namespace xxplore

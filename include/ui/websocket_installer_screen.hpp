@@ -3,7 +3,7 @@
 #include "util/websocket_installer_server.hpp"
 #include <cstdint>
 
-namespace xplore {
+namespace xxplore {
 
 class Renderer;
 class FontManager;
@@ -30,4 +30,4 @@ private:
     WebSocketInstallerServer server_;
 };
 
-} // namespace xplore
+} // namespace xxplore

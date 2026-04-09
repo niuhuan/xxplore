@@ -4,7 +4,7 @@
 #include "ui/theme.hpp"
 #include "i18n/i18n.hpp"
 
-namespace xplore {
+namespace xxplore {
 
 void LoadingOverlay::show(std::string message, uint32_t timeoutMs, uint32_t delayMs) {
     active_    = true;
@@ -68,4 +68,4 @@ void LoadingOverlay::render(Renderer& renderer, FontManager& fm, const I18n& /*i
                         FONT_SIZE_ITEM, TEXT, textMaxW);
 }
 
-} // namespace xplore
+} // namespace xxplore

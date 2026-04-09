@@ -1,7 +1,7 @@
 #pragma once
 #include "fs/file_provider.hpp"
 
-namespace xplore {
+namespace xxplore {
 namespace fs {
 
 /// Local filesystem provider wrapping POSIX/sdmc operations.
@@ -42,4 +42,4 @@ public:
 };
 
 } // namespace fs
-} // namespace xplore
+} // namespace xxplore

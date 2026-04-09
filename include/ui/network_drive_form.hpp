@@ -4,7 +4,7 @@
 #include <cstdint>
 #include <string>
 
-namespace xplore {
+namespace xxplore {
 
 class Renderer;
 class FontManager;
@@ -54,4 +54,4 @@ private:
     void activateRow(const I18n& i18n);
 };
 
-} // namespace xplore
+} // namespace xxplore

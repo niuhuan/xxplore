@@ -4,7 +4,7 @@
 #include <cstdio>
 #include <cstring>
 
-namespace xplore::fs {
+namespace xxplore::fs {
 
 std::string UsbMountProvider::toFull(const std::string& relPath) const {
     return mountPrefix_ + relPath;
@@ -136,4 +136,4 @@ bool UsbMountProvider::moveEntry(const std::string& src, const std::string& dst,
     return fs::moveEntrySimple(toFull(src), toFull(dst), errOut, adapted);
 }
 
-} // namespace xplore::fs
+} // namespace xxplore::fs

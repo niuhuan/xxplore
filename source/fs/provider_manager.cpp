@@ -9,7 +9,7 @@
 #include <mutex>
 #include <thread>
 
-namespace xplore {
+namespace xxplore {
 namespace fs {
 
 namespace {
@@ -1096,4 +1096,4 @@ bool ProviderManager::moveEntryMerge(const std::string& src, const std::string& 
 }
 
 } // namespace fs
-} // namespace xplore
+} // namespace xxplore

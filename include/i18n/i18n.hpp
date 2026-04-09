@@ -2,7 +2,7 @@
 #include <string>
 #include <unordered_map>
 
-namespace xplore {
+namespace xxplore {
 
 /// Lightweight key=value i18n loader.
 /// Translation files are plain text with `key=value` lines (# comments, UTF-8).
@@ -19,4 +19,4 @@ private:
     std::unordered_map<std::string, std::string> table;
 };
 
-} // namespace xplore
+} // namespace xxplore

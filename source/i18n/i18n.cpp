@@ -2,7 +2,7 @@
 #include <cstdio>
 #include <cstring>
 
-namespace xplore {
+namespace xxplore {
 
 bool I18n::load(const char* path) {
     table.clear();
@@ -35,4 +35,4 @@ const char* I18n::t(const char* key) const {
     return key;
 }
 
-} // namespace xplore
+} // namespace xxplore

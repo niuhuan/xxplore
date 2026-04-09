@@ -10,7 +10,7 @@
 #include <system_error>
 #include <unistd.h>
 
-namespace xplore {
+namespace xxplore {
 namespace fs {
 
 namespace stdfs = std::filesystem;
@@ -316,4 +316,4 @@ bool moveEntrySimple(const std::string& src, const std::string& dst,
 }
 
 } // namespace fs
-} // namespace xplore
+} // namespace xxplore

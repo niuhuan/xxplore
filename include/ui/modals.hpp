@@ -5,7 +5,7 @@
 #include <string>
 #include <vector>
 
-namespace xplore {
+namespace xxplore {
 
 class Renderer;
 class FontManager;
@@ -126,4 +126,4 @@ private:
     int         focus = 0; ///< 0=Cancel, 1=Install, 2=Install+Delete
 };
 
-} // namespace xplore
+} // namespace xxplore

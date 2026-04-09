@@ -9,7 +9,7 @@
 #include <cstdio>
 #include <switch.h>
 
-namespace xplore {
+namespace xxplore {
 
 namespace {
 
@@ -319,4 +319,4 @@ void NetworkDriveForm::render(Renderer& renderer, FontManager& fm, const I18n& i
     }
 }
 
-} // namespace xplore
+} // namespace xxplore

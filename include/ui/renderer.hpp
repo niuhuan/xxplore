@@ -1,7 +1,7 @@
 #pragma once
 #include <SDL.h>
 
-namespace xplore {
+namespace xxplore {
 
 /// Wraps SDL2 window/renderer for 2D drawing primitives and texture management.
 class Renderer {
@@ -51,4 +51,4 @@ private:
     bool sdlInited = false;
 };
 
-} // namespace xplore
+} // namespace xxplore

@@ -3,7 +3,7 @@
 #include "ui/touch_event.hpp"
 #include <cstdint>
 
-namespace xplore {
+namespace xxplore {
 
 class Renderer;
 class FontManager;
@@ -38,4 +38,4 @@ private:
     int buttonFocusCol_ = 0;
 };
 
-} // namespace xplore
+} // namespace xxplore

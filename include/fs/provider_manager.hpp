@@ -7,7 +7,7 @@
 #include <string>
 #include <vector>
 
-namespace xplore {
+namespace xxplore {
 namespace fs {
 
 enum class TransferOperation {
@@ -168,4 +168,4 @@ private:
 };
 
 } // namespace fs
-} // namespace xplore
+} // namespace xxplore

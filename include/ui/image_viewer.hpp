@@ -2,7 +2,7 @@
 #include <SDL.h>
 #include <string>
 
-namespace xplore {
+namespace xxplore {
 
 class Renderer;
 
@@ -24,4 +24,4 @@ private:
     int          texH    = 0;
 };
 
-} // namespace xplore
+} // namespace xxplore

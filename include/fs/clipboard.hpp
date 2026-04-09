@@ -2,7 +2,7 @@
 #include <string>
 #include <vector>
 
-namespace xplore {
+namespace xxplore {
 namespace fs {
 
 enum class ClipboardOp { Copy, Cut };
@@ -36,4 +36,4 @@ private:
 bool clipboardPasteDestinationAllowed(const Clipboard& clip, const std::string& destDir);
 
 } // namespace fs
-} // namespace xplore
+} // namespace xxplore

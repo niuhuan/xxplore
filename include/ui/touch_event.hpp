@@ -1,6 +1,6 @@
 #pragma once
 
-namespace xplore {
+namespace xxplore {
 
 struct TouchTap {
     bool active = false;
@@ -13,4 +13,4 @@ inline bool pointInRect(const TouchTap* tap, int x, int y, int w, int h) {
            tap->y >= y && tap->y < (y + h);
 }
 
-} // namespace xplore
+} // namespace xxplore

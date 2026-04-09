@@ -1,8 +1,8 @@
 #pragma once
 
-namespace xplore::util {
+namespace xxplore::util {
 
 void acquireScreenAwake();
 void releaseScreenAwake();
 
-} // namespace xplore::util
+} // namespace xxplore::util

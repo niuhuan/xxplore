@@ -4,7 +4,7 @@
 
 #include <mutex>
 
-namespace xplore::util {
+namespace xxplore::util {
 
 namespace {
 
@@ -29,4 +29,4 @@ void releaseScreenAwake() {
         appletSetMediaPlaybackState(false);
 }
 
-} // namespace xplore::util
+} // namespace xxplore::util

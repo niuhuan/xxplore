@@ -1,7 +1,7 @@
 #pragma once
 #include <SDL.h>
 
-namespace xplore {
+namespace xxplore {
 /// Theme constants ported from plorex-js (colors.ts + layout.ts).
 namespace theme {
 
@@ -84,4 +84,4 @@ constexpr int   ANIM_DURATION_MS = 250;
 constexpr float ANIM_DURATION_F  = 250.0f;
 
 } // namespace theme
-} // namespace xplore
+} // namespace xxplore

@@ -9,7 +9,7 @@
 #include <cstring>
 #include <switch.h>
 
-namespace xplore {
+namespace xxplore {
 
 static constexpr int kCardW = 560;
 static constexpr int kCardH = 220;
@@ -585,4 +585,4 @@ void ModalInstallPrompt::render(Renderer& renderer, FontManager& fm, const I18n&
     }
 }
 
-} // namespace xplore
+} // namespace xxplore

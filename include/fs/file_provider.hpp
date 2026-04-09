@@ -5,7 +5,7 @@
 #include <string>
 #include <vector>
 
-namespace xplore {
+namespace xxplore {
 namespace fs {
 
 /// Callback for long operations. Return true to continue, false to interrupt.
@@ -101,4 +101,4 @@ public:
 };
 
 } // namespace fs
-} // namespace xplore
+} // namespace xxplore

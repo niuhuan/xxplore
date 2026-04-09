@@ -4,7 +4,7 @@
 #include <string>
 #include <vector>
 
-namespace xplore {
+namespace xxplore {
 namespace fs {
 
 struct FileEntry {
@@ -76,4 +76,4 @@ bool moveEntrySimple(const std::string& src, const std::string& dst,
                      std::string& errOut, const ProgressCb& cb);
 
 } // namespace fs
-} // namespace xplore
+} // namespace xxplore

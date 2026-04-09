@@ -11,7 +11,7 @@
 #include <vector>
 #include <switch.h>
 
-namespace xplore {
+namespace xxplore {
 
 namespace {
 
@@ -376,4 +376,4 @@ void WebSocketInstallerScreen::render(Renderer& renderer, FontManager& fm, const
     }
 }
 
-} // namespace xplore
+} // namespace xxplore

@@ -1,7 +1,7 @@
 #include "fs/file_provider.hpp"
 #include <cstring>
 
-namespace xplore {
+namespace xxplore {
 namespace fs {
 
 bool FileProvider::writeFileChunk(const std::string& path, uint64_t offset,
@@ -152,4 +152,4 @@ uint64_t FileProvider::fileSize(const std::string& path) {
 }
 
 } // namespace fs
-} // namespace xplore
+} // namespace xxplore

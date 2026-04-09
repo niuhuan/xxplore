@@ -4,7 +4,7 @@
 #include <SDL_image.h>
 #include <cstdio>
 
-namespace xplore {
+namespace xxplore {
 
 bool Renderer::init() {
     if (SDL_Init(SDL_INIT_VIDEO) < 0) {
@@ -15,7 +15,7 @@ bool Renderer::init() {
 
     IMG_Init(IMG_INIT_PNG | IMG_INIT_JPG);
 
-    sdlWindow = SDL_CreateWindow("xplore",
+    sdlWindow = SDL_CreateWindow("xxplore",
         SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
         theme::SCREEN_W, theme::SCREEN_H, 0);
     if (!sdlWindow) {
@@ -132,4 +132,4 @@ void Renderer::resetRenderTarget() {
     SDL_SetRenderTarget(sdlRenderer, nullptr);
 }
 
-} // namespace xplore
+} // namespace xxplore

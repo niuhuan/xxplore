@@ -4,7 +4,7 @@
 #include <cstdint>
 #include <string>
 
-namespace xplore {
+namespace xxplore {
 
 class Renderer;
 class FontManager;
@@ -92,4 +92,4 @@ private:
     MenuCommand cmdAt(int row, int col, const MainMenuState& st) const;
 };
 
-} // namespace xplore
+} // namespace xxplore

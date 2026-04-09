@@ -20,7 +20,7 @@
 
 #include <switch.h>
 
-namespace xplore {
+namespace xxplore {
 
 namespace {
 
@@ -2161,4 +2161,4 @@ bool runInstallQueue(const std::vector<InstallQueueItem>& items, bool installToN
     }
 }
 
-} // namespace xplore
+} // namespace xxplore

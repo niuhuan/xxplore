@@ -1,6 +1,6 @@
 #include "application.hpp"
 
 int main(int argc, char* argv[]) {
-    xplore::Application app;
+    xxplore::Application app;
     return app.run(argc, argv);
 }

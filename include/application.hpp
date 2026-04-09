@@ -1,10 +1,10 @@
 #pragma once
 
-namespace xplore {
+namespace xxplore {
 
 class Application {
 public:
     int run(int argc, char* argv[]);
 };
 
-} // namespace xplore
+} // namespace xxplore

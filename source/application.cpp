@@ -35,7 +35,7 @@
 #include <vector>
 #include <switch.h>
 
-namespace xplore {
+namespace xxplore {
 
 namespace {
 
@@ -93,7 +93,7 @@ struct FooterTouchButtonsLayout {
 
 struct PanelState {
     std::string      path;
-    xplore::FileList list;
+    xxplore::FileList list;
 };
 
 struct PendingPanelLoad {
@@ -129,7 +129,7 @@ struct PanelAnim {
     }
     void update(uint32_t deltaMs) {
         if (progress >= 1.0f) return;
-        progress += static_cast<float>(deltaMs) / xplore::theme::ANIM_DURATION_F;
+        progress += static_cast<float>(deltaMs) / xxplore::theme::ANIM_DURATION_F;
         if (progress > 1.0f) progress = 1.0f;
     }
     float currentLeftW() const {
@@ -489,7 +489,7 @@ int Application::run(int argc, char* argv[]) {
     const char* argv0 = (argv && argc > 0) ? argv[0] : nullptr;
     const std::string externalFontPath = deriveSiblingFontPath(argv0);
     const std::string selectedFontPath =
-        fileExists(externalFontPath) ? externalFontPath : "romfs:/fonts/xplore.ttf";
+        fileExists(externalFontPath) ? externalFontPath : "romfs:/fonts/xxplore.ttf";
 
 #ifdef XPLORE_DEBUG
     std::printf("Font: path=%s cache_limit=%zuKB\n",
@@ -708,7 +708,7 @@ int Application::run(int argc, char* argv[]) {
     };
 
     auto appTitle = [&]() -> const char* {
-        return appletMode ? "Xplore(Applet)" : "Xplore";
+        return appletMode ? "Xxplore(Applet)" : "Xxplore";
     };
 
     auto localizedDocText = [&](const char* docName, const char* fallbackKey) {
@@ -2053,4 +2053,4 @@ int Application::run(int argc, char* argv[]) {
     return 0;
 }
 
-} // namespace xplore
+} // namespace xxplore

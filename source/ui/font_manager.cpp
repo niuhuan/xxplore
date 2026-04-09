@@ -3,7 +3,7 @@
 #include <cstdio>
 #include <string>
 
-namespace xplore {
+namespace xxplore {
 
 namespace {
 
@@ -364,4 +364,4 @@ void FontManager::drawTextEllipsis(SDL_Renderer* renderer, const char* text,
     drawText(renderer, ell, x, y, fontSize, color);
 }
 
-} // namespace xplore
+} // namespace xxplore

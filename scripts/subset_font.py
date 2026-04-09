@@ -1,6 +1,6 @@
 """
 Subset cjk.ttf to include only characters used in the project source files,
-plus full ASCII range. Outputs a minimal font to romfs/fonts/xplore.ttf.
+plus full ASCII range. Outputs a minimal font to romfs/fonts/xxplore.ttf.
 
 Run after adding/changing i18n translations to keep the font up to date.
 
@@ -16,7 +16,7 @@ from fontTools.subset import main as subset_main
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 INPUT_FONT = os.path.join(PROJECT_ROOT, "scripts", "cjk.ttf")
-OUTPUT_FONT = os.path.join(PROJECT_ROOT, "romfs", "fonts", "xplore.ttf")
+OUTPUT_FONT = os.path.join(PROJECT_ROOT, "romfs", "fonts", "xxplore.ttf")
 
 PATTERNS = [
     "source/**/*.cpp",

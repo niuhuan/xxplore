@@ -1,4 +1,4 @@
-# Xplore
+# Xxplore
 
 Nintendo Switch 上专业的文件管理器, 软件安装器。
 
@@ -47,7 +47,7 @@ Nintendo Switch 上专业的文件管理器, 软件安装器。
 # 2. 安装 Python 依赖（首次）
 uv pip install fonttools brotli
 
-# 3. 生成子集化字体 -> romfs/fonts/xplore.ttf
+# 3. 生成子集化字体 -> romfs/fonts/xxplore.ttf
 uv run python scripts/subset_font.py
 
 # 4. 编译
@@ -57,28 +57,28 @@ make DEFINES=-DXPLORE_DEBUG
 make DEFINES=-DXPLORE_DEBUG dist
 ```
 
-生成的 `xplore.nro` 可通过 hbmenu 运行。
+生成的 `xxplore.nro` 可通过 hbmenu 运行。
 
-`make dist` 会创建 `dist/switch/`，并把 `xplore.nro` 复制进去，同时把 `scripts/cjk.ttf` 改名为 `xplore.ttf` 一并放入，供外挂字体加载使用。
+`make dist` 会创建 `dist/switch/`，并把 `xxplore.nro` 复制进去，同时把 `scripts/cjk.ttf` 改名为 `xxplore.ttf` 一并放入，供外挂字体加载使用。
 
 ## 外挂字体
 
-Xplore 会检查运行中的 `.nro` 同目录、同文件名的 `.ttf`。
+Xxplore 会检查运行中的 `.nro` 同目录、同文件名的 `.ttf`。
 
 例如：
 
 ```text
-sdmc:/switch/xplore/xplore.nro
-sdmc:/switch/xplore/xplore.ttf
+sdmc:/switch/xxplore/xxplore.nro
+sdmc:/switch/xxplore/xxplore.ttf
 ```
 
-如果 `xplore.ttf` 存在，Xplore 会把它作为整个 UI 的唯一字体使用，不和内置字体混排；如果不存在，则使用 `romfs:/fonts/xplore.ttf`。
+如果 `xxplore.ttf` 存在，Xxplore 会把它作为整个 UI 的唯一字体使用，不和内置字体混排；如果不存在，则使用 `romfs:/fonts/xxplore.ttf`。
 
 这适合在内置子集字体缺字时补充更多字符。
 
 ### SMB2 支持
 
-SMB2 网络驱动器支持需要 [libsmb2](https://github.com/sahlberg/libsmb2)，Xplore 会直接链接它。
+SMB2 网络驱动器支持需要 [libsmb2](https://github.com/sahlberg/libsmb2)，Xxplore 会直接链接它。
 
 ```bash
 # 克隆 libsmb2
@@ -89,7 +89,7 @@ cd libsmb2
 sudo make -f Makefile.platform switch_install
 ```
 
-安装后重新编译 Xplore 即可。
+安装后重新编译 Xxplore 即可。
 
 
 ### DEBUG MODE

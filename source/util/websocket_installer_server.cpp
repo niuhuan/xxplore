@@ -18,7 +18,7 @@
 #include <sys/types.h>
 #include <unistd.h>
 
-namespace xplore {
+namespace xxplore {
 
 namespace {
 
@@ -1551,4 +1551,4 @@ bool WebSocketInstallerServer::recvWsFrame(int fd, uint8_t& opcode, std::string&
     return false;
 }
 
-} // namespace xplore
+} // namespace xxplore

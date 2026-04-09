@@ -6,7 +6,7 @@
 #include <dirent.h>
 #include <sys/stat.h>
 
-namespace xplore {
+namespace xxplore {
 namespace fs {
 
 /// Convert provider-relative path to full sdmc: path.
@@ -150,4 +150,4 @@ bool LocalFileProvider::moveEntry(const std::string& src, const std::string& dst
 }
 
 } // namespace fs
-} // namespace xplore
+} // namespace xxplore

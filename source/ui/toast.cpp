@@ -3,7 +3,7 @@
 #include "ui/font_manager.hpp"
 #include "ui/theme.hpp"
 
-namespace xplore {
+namespace xxplore {
 
 namespace {
 
@@ -73,4 +73,4 @@ void Toast::render(Renderer& renderer, FontManager& fontManager) {
     }
 }
 
-} // namespace xplore
+} // namespace xxplore

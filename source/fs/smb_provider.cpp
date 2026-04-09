@@ -9,7 +9,7 @@
 #include <smb2/smb2.h>
 #include <smb2/libsmb2.h>
 
-namespace xplore {
+namespace xxplore {
 namespace fs {
 
 namespace {
@@ -476,4 +476,4 @@ retry_write_chunk:
 }
 
 } // namespace fs
-} // namespace xplore
+} // namespace xxplore

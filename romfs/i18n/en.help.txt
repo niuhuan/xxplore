@@ -4,7 +4,7 @@ ums*: means a USB storage device
 Name(WebDAV): means a WebDAV drive
 Name(SMB): means a Samba/SMB drive
 
-When Xplore runs in application mode,
+When Xxplore runs in application mode,
 you can view larger images
 and use a larger install cache.
 

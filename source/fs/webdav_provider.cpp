@@ -7,7 +7,7 @@
 #include <string>
 #include <vector>
 
-namespace xplore {
+namespace xxplore {
 namespace fs {
 
 namespace {
@@ -922,4 +922,4 @@ bool WebDavProvider::uploadFromStream(const std::string& dstPath, uint64_t size,
 }
 
 } // namespace fs
-} // namespace xplore
+} // namespace xxplore

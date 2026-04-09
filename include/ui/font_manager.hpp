@@ -7,14 +7,14 @@
 #include <string>
 #include <unordered_map>
 
-namespace xplore {
+namespace xxplore {
 
 /// Manages TTF font loading and UTF-8 text rendering via SDL2_ttf.
 /// Fonts are opened from a single .ttf file; different point sizes are cached.
 class FontManager {
 public:
     /// Initialize SDL_ttf. Call after Renderer::init() and romfsInit().
-    /// @param fontPath  path to the .ttf file (e.g. "romfs:/fonts/xplore.ttf")
+    /// @param fontPath  path to the .ttf file (e.g. "romfs:/fonts/xxplore.ttf")
     bool init(const char* fontPath, std::size_t glyphCacheLimitBytes);
     /// Close all cached fonts and shut down SDL_ttf.
     void shutdown();
@@ -59,4 +59,4 @@ private:
     bool ttfInited = false;
 };
 
-} // namespace xplore
+} // namespace xxplore
