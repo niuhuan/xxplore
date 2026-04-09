@@ -1,8 +1,34 @@
 # Xplore
 
-Nintendo Switch 双栏文件管理器。
+Nintendo Switch 上专业的文件管理器, 软件安装器。
 
 [English](README.md) | 中文
+
+## 特性
+
+- 可以随意浏览和管理 SD卡 / WebDav / Samba / USB设备中的文件, 也可以安装器中的 NSP / XCI / NSZ / XCZ。
+- 高效的文件管理, 双页签模式, 提高在不同驱动器之间复制或移动文件的效率。
+- 支持触摸屏操作。
+- 安装器缓冲, 非线性读写, 即便是网络文件一样快速。
+- 启动HTTP服务器, PC只需要浏览器, 不需要安装额外软件, 就可以向Switch安装软件。
+- 外挂字体, 显示非SD卡以外驱动器的CJK文件名。
+
+## 截图
+
+界面:
+
+![root](images/root_chs.jpg)
+
+菜单:
+
+![main_menu](images/main_menu_chs.jpg)
+
+网络驱动器:
+
+![remote_config](images/remote_config_chs.jpg)
+
+安装:
+![install](images/install_chs.jpg)
 
 ## 构建
 
@@ -69,3 +95,10 @@ sudo make -f Makefile.platform switch_install
 ```shell
 make DEFINES=-DXPLORE_DEBUG
 ```
+
+## 协议
+
+参考 [LICENSE](LICENSE) 文件。
+
+除上述声明的依赖 作者使用 [cjk-fonts-ttf](https://github.com/life888888/cjk-fonts-ttf) 字体。
+

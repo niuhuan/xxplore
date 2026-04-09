@@ -17,3 +17,7 @@ AGENTS.md
 
 # source fonts, thin with scripts
 *.ttf
+
+# ide
+.idea/
+.vscode/

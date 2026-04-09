@@ -161,9 +161,9 @@ $(BUILD):
 dist: all
 	@echo dist ...
 	@rm -fr $(DIST)
-	@mkdir -p $(DIST)/switch
-	@cp $(TARGET).nro $(DIST)/switch/$(TARGET).nro
-	@cp scripts/cjk.ttf $(DIST)/switch/$(TARGET).ttf
+	@mkdir -p $(DIST)/switch/xplore
+	@cp $(TARGET).nro $(DIST)/switch/xplore/$(TARGET).nro
+	@cp scripts/cjk.ttf $(DIST)/switch/xplore/$(TARGET).ttf
 
 #---------------------------------------------------------------------------------
 clean:
