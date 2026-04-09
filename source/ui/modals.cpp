@@ -15,6 +15,25 @@ static constexpr int kCardW = 560;
 static constexpr int kCardH = 220;
 static constexpr int kPad   = 20;
 static constexpr int kInfoLinesPerPage = 8;
+static constexpr int kOptionButtonH = 48;
+static constexpr int kOptionTouchPadX = 16;
+static constexpr int kOptionTouchPadY = 10;
+
+static void drawModalOptionButton(Renderer& renderer, FontManager& fm,
+                                  int x, int y, int w, int h,
+                                  const char* label, SDL_Color textColor,
+                                  bool focused) {
+    using namespace theme;
+    SDL_Color bg = focused ? CURSOR_ROW : SURFACE_HOVER;
+    SDL_Color border = focused ? PRIMARY_DIM : DIVIDER;
+    renderer.drawRoundedRectFilled(x, y, w, h, 10, bg);
+    renderer.drawRoundedRect(x, y, w, h, 10, border);
+    int textW = fm.measureText(label, FONT_SIZE_ITEM);
+    int textH = fm.fontHeight(FONT_SIZE_ITEM);
+    int textX = x + (w - textW) / 2;
+    int textY = y + (h - textH) / 2;
+    fm.drawText(renderer.sdl(), label, textX, textY, FONT_SIZE_ITEM, textColor);
+}
 
 // ---- ModalConfirm (OK / Cancel) ----
 
@@ -35,18 +54,20 @@ ConfirmResult ModalConfirm::handleInput(uint64_t kDown, const TouchTap* tap) {
     if (!active) return ConfirmResult::None;
     int cx = (theme::SCREEN_W - kCardW) / 2;
     int cy = (theme::SCREEN_H - kCardH) / 2;
-    int btnY = cy + kCardH - 56;
-    int cancelW = 120;
-    int okW = 120;
-    int gap = 40;
+    int btnY = cy + kCardH - 68;
+    int cancelW = 156;
+    int okW = 156;
+    int gap = 52;
     int total = cancelW + gap + okW;
     int bx = cx + (kCardW - total) / 2;
     if (tap && tap->active) {
-        if (pointInRect(tap, bx - 12, btnY - 8, cancelW, 36)) {
+        if (pointInRect(tap, bx - kOptionTouchPadX, btnY - kOptionTouchPadY,
+                        cancelW + kOptionTouchPadX * 2, kOptionButtonH + kOptionTouchPadY * 2)) {
             focusOk = 0;
             return ConfirmResult::Cancelled;
         }
-        if (pointInRect(tap, bx + cancelW + gap - 12, btnY - 8, okW, 36)) {
+        if (pointInRect(tap, bx + cancelW + gap - kOptionTouchPadX, btnY - kOptionTouchPadY,
+                        okW + kOptionTouchPadX * 2, kOptionButtonH + kOptionTouchPadY * 2)) {
             focusOk = 1;
             return ConfirmResult::Confirmed;
         }
@@ -79,17 +100,19 @@ void ModalConfirm::render(Renderer& renderer, FontManager& fm, const I18n& i18n)
 
     const char* okTxt    = i18n.t("modal.ok");
     const char* cancelTxt = i18n.t("modal.cancel");
-    int btnY             = cy + kCardH - 56;
-    int okW              = fm.measureText(okTxt, FONT_SIZE_ITEM);
-    int cancelW          = fm.measureText(cancelTxt, FONT_SIZE_ITEM);
-    int gap              = 40;
+    int btnY             = cy + kCardH - 68;
+    int okW              = 156;
+    int cancelW          = 156;
+    int gap              = 52;
     int total            = cancelW + gap + okW;
     int bx               = cx + (kCardW - total) / 2;
 
     SDL_Color canCol   = (focusOk == 0) ? PRIMARY : TEXT_SECONDARY;
     SDL_Color okCol    = (focusOk == 1) ? PRIMARY : TEXT_SECONDARY;
-    fm.drawText(renderer.sdl(), cancelTxt, bx, btnY, FONT_SIZE_ITEM, canCol);
-    fm.drawText(renderer.sdl(), okTxt, bx + cancelW + gap, btnY, FONT_SIZE_ITEM, okCol);
+    drawModalOptionButton(renderer, fm, bx, btnY, cancelW, kOptionButtonH, cancelTxt, canCol,
+                          focusOk == 0);
+    drawModalOptionButton(renderer, fm, bx + cancelW + gap, btnY, okW, kOptionButtonH, okTxt,
+                          okCol, focusOk == 1);
 }
 
 // ---- ModalChoice (Cancel / Merge / Overwrite) ----
@@ -111,14 +134,17 @@ ChoiceResult ModalChoice::handleInput(uint64_t kDown, const TouchTap* tap) {
     if (!active) return ChoiceResult::None;
     int cx = (theme::SCREEN_W - kCardW) / 2;
     int cy = (theme::SCREEN_H - kCardH) / 2;
-    int btnY = cy + kCardH - 56;
-    int gap  = 30;
-    const int hitW = 140;
+    int btnY = cy + kCardH - 68;
+    int gap  = 24;
+    const int hitW = 164;
     int total = hitW * 3 + gap * 2;
     int bx = cx + (kCardW - total) / 2;
     if (tap && tap->active) {
         for (int i = 0; i < 3; ++i) {
-            if (!pointInRect(tap, bx + i * (hitW + gap), btnY - 8, hitW, 36))
+            if (!pointInRect(tap, bx + i * (hitW + gap) - kOptionTouchPadX,
+                             btnY - kOptionTouchPadY,
+                             hitW + kOptionTouchPadX * 2,
+                             kOptionButtonH + kOptionTouchPadY * 2))
                 continue;
             focus = i;
             return i == 0 ? ChoiceResult::Cancel
@@ -167,20 +193,15 @@ void ModalChoice::render(Renderer& renderer, FontManager& fm, const I18n& i18n) 
         i18n.t("modal.merge"),
         i18n.t("modal.overwrite"),
     };
-    int btnY = cy + kCardH - 56;
-    int gap  = 30;
-    int ws[3];
-    int total = 0;
-    for (int i = 0; i < 3; i++) {
-        ws[i] = fm.measureText(labels[i], FONT_SIZE_ITEM);
-        total += ws[i];
-    }
-    total += gap * 2;
+    int btnY = cy + kCardH - 68;
+    int gap  = 24;
+    int total = 164 * 3 + gap * 2;
     int bx = cx + (kCardW - total) / 2;
     for (int i = 0; i < 3; i++) {
         SDL_Color col = (focus == i) ? PRIMARY : TEXT_SECONDARY;
-        fm.drawText(renderer.sdl(), labels[i], bx, btnY, FONT_SIZE_ITEM, col);
-        bx += ws[i] + gap;
+        drawModalOptionButton(renderer, fm, bx, btnY, 164, kOptionButtonH, labels[i], col,
+                              focus == i);
+        bx += 164 + gap;
     }
 }
 
@@ -277,14 +298,17 @@ ErrorActionResult ModalErrorAction::handleInput(uint64_t kDown, const TouchTap* 
     int cardH = 250;
     int cx = (theme::SCREEN_W - cardW) / 2;
     int cy = (theme::SCREEN_H - cardH) / 2;
-    int btnY = cy + cardH - 56;
-    const int hitW = 160;
-    const int gap = 24;
+    int btnY = cy + cardH - 68;
+    const int hitW = 176;
+    const int gap = 28;
     int total = hitW * 3 + gap * 2;
     int bx = cx + (cardW - total) / 2;
     if (tap && tap->active) {
         for (int i = 0; i < 3; ++i) {
-            if (!pointInRect(tap, bx + i * (hitW + gap), btnY - 8, hitW, 36))
+            if (!pointInRect(tap, bx + i * (hitW + gap) - kOptionTouchPadX,
+                             btnY - kOptionTouchPadY,
+                             hitW + kOptionTouchPadX * 2,
+                             kOptionButtonH + kOptionTouchPadY * 2))
                 continue;
             focus = i;
             switch (i) {
@@ -341,22 +365,17 @@ void ModalErrorAction::render(Renderer& renderer, FontManager& fm, const I18n& i
         i18n.t("modal.ignore"),
         i18n.t("modal.ignore_all"),
     };
-    int btnY = cy + cardH - 56;
-    int gap = 30;
-    int ws[3];
-    int total = 0;
-    for (int i = 0; i < 3; ++i) {
-        ws[i] = fm.measureText(labels[i], FONT_SIZE_ITEM);
-        total += ws[i];
-    }
-    total += gap * 2;
+    int btnY = cy + cardH - 68;
+    int gap = 28;
+    int total = 176 * 3 + gap * 2;
     int bx = cx + (cardW - total) / 2;
     for (int i = 0; i < 3; ++i) {
         SDL_Color col = (focus == i) ? PRIMARY : TEXT_SECONDARY;
         if (i == 0 && focus != i)
             col = DANGER;
-        fm.drawText(renderer.sdl(), labels[i], bx, btnY, FONT_SIZE_ITEM, col);
-        bx += ws[i] + gap;
+        drawModalOptionButton(renderer, fm, bx, btnY, 176, kOptionButtonH, labels[i], col,
+                              focus == i);
+        bx += 176 + gap;
     }
 }
 
@@ -505,14 +524,17 @@ InstallPromptResult ModalInstallPrompt::handleInput(uint64_t kDown, const TouchT
     if (!active) return InstallPromptResult::None;
     int cx = (theme::SCREEN_W - kCardW) / 2;
     int cy = (theme::SCREEN_H - kCardH) / 2;
-    int btnY = cy + kCardH - 56;
-    const int hitW = 160;
-    const int gap = 24;
+    int btnY = cy + kCardH - 68;
+    const int hitW = 176;
+    const int gap = 28;
     int total = hitW * 3 + gap * 2;
     int bx = cx + (kCardW - total) / 2;
     if (tap && tap->active) {
         for (int i = 0; i < 3; ++i) {
-            if (!pointInRect(tap, bx + i * (hitW + gap), btnY - 8, hitW, 36))
+            if (!pointInRect(tap, bx + i * (hitW + gap) - kOptionTouchPadX,
+                             btnY - kOptionTouchPadY,
+                             hitW + kOptionTouchPadX * 2,
+                             kOptionButtonH + kOptionTouchPadY * 2))
                 continue;
             focus = i;
             switch (i) {
@@ -566,22 +588,17 @@ void ModalInstallPrompt::render(Renderer& renderer, FontManager& fm, const I18n&
         i18n.t("installer.install"),
         i18n.t("installer.install_delete"),
     };
-    int btnY = cy + cardH - 56;
+    int btnY = cy + cardH - 68;
     int gap  = 28;
-    int ws[3];
-    int total = 0;
-    for (int i = 0; i < 3; i++) {
-        ws[i] = fm.measureText(labels[i], FONT_SIZE_ITEM);
-        total += ws[i];
-    }
-    total += gap * 2;
+    int total = 176 * 3 + gap * 2;
     int bx = cx + (cardW - total) / 2;
     for (int i = 0; i < 3; i++) {
         SDL_Color col = (focus == i) ? PRIMARY : TEXT_SECONDARY;
         if (i == 2 && focus != i)
             col = DANGER;
-        fm.drawText(renderer.sdl(), labels[i], bx, btnY, FONT_SIZE_ITEM, col);
-        bx += ws[i] + gap;
+        drawModalOptionButton(renderer, fm, bx, btnY, 176, kOptionButtonH, labels[i], col,
+                              focus == i);
+        bx += 176 + gap;
     }
 }
 
