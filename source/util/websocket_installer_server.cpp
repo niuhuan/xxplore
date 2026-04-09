@@ -11,6 +11,7 @@
 #include <fcntl.h>
 #include <json-c/json.h>
 #include <netinet/in.h>
+#include <ctime>
 #include <switch.h>
 #include <switch/crypto/sha1.h>
 #include <sys/select.h>
@@ -169,6 +170,7 @@ bool WebSocketInstallerServer::start(WebInstallTarget target) {
         totalBytes_ = 0;
         itemCount_ = 0;
         currentItem_.clear();
+        speedMeter_.reset();
     }
 
     stopRequested_ = false;
@@ -204,6 +206,7 @@ void WebSocketInstallerServer::stop() {
         currentItem_.clear();
         itemCount_ = 0;
         totalBytes_ = 0;
+        speedMeter_.reset();
     }
 }
 
@@ -250,6 +253,26 @@ std::string WebSocketInstallerServer::currentItem() const {
 WebInstallTarget WebSocketInstallerServer::target() const {
     std::lock_guard<std::mutex> lock(mutex_);
     return target_;
+}
+
+uint64_t WebSocketInstallerServer::speedBytesPerSec() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return speedMeter_.rateBytesPerSec(static_cast<uint64_t>(std::time(nullptr)));
+}
+
+bool WebSocketInstallerServer::hasSpeedSample() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return speedMeter_.hasRate(static_cast<uint64_t>(std::time(nullptr)));
+}
+
+uint64_t WebSocketInstallerServer::transferredBytes() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return speedMeter_.latestTotalBytes();
+}
+
+bool WebSocketInstallerServer::speedFinished() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return speedMeter_.finished();
 }
 
 bool WebSocketInstallerServer::bindListenSocket(uint16_t& outPort) {
@@ -450,6 +473,20 @@ void WebSocketInstallerServer::installWorkerMain(std::vector<RemoteFileEntry> it
         setProgress(current, total, currentItem);
         sendProgressEvent(current, total, currentItem);
     };
+    callbacks.onProgressBytes =
+        [this](uint64_t currentItemBytes, uint64_t currentItemTotal,
+               uint64_t totalBytesDone, uint64_t totalBytesTotal) {
+            (void)currentItemBytes;
+            (void)currentItemTotal;
+            (void)totalBytesTotal;
+            std::lock_guard<std::mutex> lock(mutex_);
+            speedMeter_.update(totalBytesDone, static_cast<uint64_t>(std::time(nullptr)));
+        };
+
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        speedMeter_.reset();
+    }
 
     InstallDataSourceCallbacks sourceCallbacks;
     sourceCallbacks.readRange =
@@ -471,6 +508,10 @@ void WebSocketInstallerServer::installWorkerMain(std::vector<RemoteFileEntry> it
         appendLog("Web install completed.");
         setStatus(text("status_install_completed"));
         setProgress(1.0f, 1.0f, "");
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            speedMeter_.markFinished(static_cast<uint64_t>(std::time(nullptr)));
+        }
         sendInstallResult(true, "Install completed.");
     } else {
         if (!err.empty())

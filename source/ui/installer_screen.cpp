@@ -8,6 +8,7 @@
 #include "util/screen_awake.hpp"
 #include <algorithm>
 #include <cstdio>
+#include <ctime>
 #include <switch.h>
 
 namespace xxplore {
@@ -36,6 +37,21 @@ SDL_Color withAlpha(SDL_Color color, Uint8 alpha) {
     return color;
 }
 
+std::string formatInstallSpeed(uint64_t bytesPerSec) {
+    char buf[64];
+    if (bytesPerSec >= 1024ULL * 1024ULL) {
+        std::snprintf(buf, sizeof(buf), "%.1f MiB/s",
+                      static_cast<double>(bytesPerSec) / (1024.0 * 1024.0));
+    } else if (bytesPerSec >= 1024ULL) {
+        std::snprintf(buf, sizeof(buf), "%.1f KiB/s",
+                      static_cast<double>(bytesPerSec) / 1024.0);
+    } else {
+        std::snprintf(buf, sizeof(buf), "%llu B/s",
+                      static_cast<unsigned long long>(bytesPerSec));
+    }
+    return buf;
+}
+
 } // namespace
 
 void InstallerScreen::open(std::vector<InstallQueueItem> items, InstallDeleteMode deleteMode,
@@ -62,6 +78,7 @@ void InstallerScreen::open(std::vector<InstallQueueItem> items, InstallDeleteMod
         totalProgress_   = 0.0f;
         currentStatus_.clear();
         errorMessage_.clear();
+        speedMeter_.reset();
         sourceCallbacks_ = std::move(sourceCallbacks);
     }
     appendLog(appletMode ? "Applet mode detected." : "Title override mode detected.");
@@ -133,6 +150,7 @@ void InstallerScreen::startInstallWorker() {
         totalProgress_ = 0.0f;
         currentStatus_.clear();
         errorMessage_.clear();
+        speedMeter_.reset();
     }
 
     worker_ = std::thread([this, items = std::move(items), installToNand, deleteAfterInstall,
@@ -155,6 +173,15 @@ void InstallerScreen::startInstallWorker() {
             currentProgress_ = currentProgress;
             totalProgress_ = totalProgress;
         };
+        callbacks.onProgressBytes = [this](uint64_t currentItemBytes, uint64_t currentItemTotal,
+                                           uint64_t totalBytesDone,
+                                           uint64_t totalBytesTotal) {
+            (void)currentItemBytes;
+            (void)currentItemTotal;
+            (void)totalBytesTotal;
+            std::lock_guard<std::mutex> lock(mutex_);
+            speedMeter_.update(totalBytesDone, static_cast<uint64_t>(std::time(nullptr)));
+        };
 
         std::string err;
         bool ok = runInstallQueue(items, installToNand, deleteAfterInstall, callbacks, err,
@@ -166,6 +193,7 @@ void InstallerScreen::startInstallWorker() {
         currentStatus_.clear();
         if (ok) {
             state_ = State::Finished;
+            speedMeter_.markFinished(static_cast<uint64_t>(std::time(nullptr)));
             if (logs_.size() >= 30)
                 logs_.pop_front();
             logs_.push_back("Install completed.");
@@ -358,6 +386,11 @@ void InstallerScreen::render(Renderer& renderer, FontManager& fm, const I18n& i1
     float totalProgress = 0.0f;
     std::string currentStatus;
     std::string errorMessage;
+    uint64_t speedBytesPerSec = 0;
+    bool hasSpeedSample = false;
+    uint64_t transferredBytes = 0;
+    bool speedFinished = false;
+    uint64_t nowSec = static_cast<uint64_t>(std::time(nullptr));
     {
         std::lock_guard<std::mutex> lock(mutex_);
         open = open_;
@@ -375,6 +408,10 @@ void InstallerScreen::render(Renderer& renderer, FontManager& fm, const I18n& i1
         totalProgress = totalProgress_;
         currentStatus = currentStatus_;
         errorMessage = errorMessage_;
+        speedBytesPerSec = speedMeter_.rateBytesPerSec(nowSec);
+        hasSpeedSample = speedMeter_.hasRate(nowSec);
+        transferredBytes = speedMeter_.latestTotalBytes();
+        speedFinished = speedMeter_.finished();
     }
     if (!open)
         return;
@@ -549,6 +586,10 @@ void InstallerScreen::render(Renderer& renderer, FontManager& fm, const I18n& i1
     if (state == State::Finished) {
         fm.drawText(renderer.sdl(), i18n.t("installer.exit_hint"), x, cardY + cardH - 32,
                     theme::FONT_SIZE_SMALL, theme::TEXT_SECONDARY);
+        const char* speedText = i18n.t("installer.speed_done");
+        int speedW = fm.measureText(speedText, theme::FONT_SIZE_SMALL);
+        fm.drawText(renderer.sdl(), speedText, x + (cardW - 48) - speedW, cardY + cardH - 32,
+                    theme::FONT_SIZE_SMALL, theme::TEXT_SECONDARY);
     } else if (state == State::Failed) {
         fm.drawTextEllipsis(renderer.sdl(), i18n.t("installer.failed_cleanup_hint"), x,
                             cardY + cardH - 52, theme::FONT_SIZE_SMALL, theme::TEXT_SECONDARY,
@@ -559,6 +600,20 @@ void InstallerScreen::render(Renderer& renderer, FontManager& fm, const I18n& i1
         }
         fm.drawText(renderer.sdl(), i18n.t("installer.failed_hint"), x, cardY + cardH - 30,
                     theme::FONT_SIZE_SMALL, theme::DANGER);
+    } else if (state == State::Running) {
+        std::string speedText;
+        if (speedFinished)
+            speedText = i18n.t("installer.speed_done");
+        else if (hasSpeedSample)
+            speedText = formatInstallSpeed(speedBytesPerSec);
+        else if (transferredBytes == 0)
+            speedText = i18n.t("installer.speed_pending");
+        else
+            speedText = fs::formatSize(transferredBytes);
+        int speedW = fm.measureText(speedText.c_str(), theme::FONT_SIZE_SMALL);
+        fm.drawText(renderer.sdl(), speedText.c_str(),
+                    x + (cardW - 48) - speedW, cardY + cardH - 32,
+                    theme::FONT_SIZE_SMALL, theme::TEXT_SECONDARY);
     }
 }
 

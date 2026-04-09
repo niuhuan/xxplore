@@ -1245,12 +1245,22 @@ void emitStatus(const InstallBackendCallbacks& callbacks, const std::string& sta
 }
 
 void emitProgress(StreamProgressContext& ctx, uint64_t currentItemBytes, uint64_t currentItemTotal) {
-    if (!ctx.callbacks || !ctx.callbacks->onProgress)
+    if (!ctx.callbacks)
         return;
+
+    uint64_t currentDone = ctx.packageCompletedBytes + currentItemBytes;
+    uint64_t totalDone = ctx.totalCompletedBytesBefore + currentDone;
+    if (ctx.callbacks->onProgressBytes) {
+        ctx.callbacks->onProgressBytes(currentDone, currentItemTotal,
+                                       totalDone, ctx.totalBytes);
+    }
+    if (!ctx.callbacks->onProgress)
+        return;
+
     float current = ctx.packageTotalBytes == 0 ? 0.0f :
-        static_cast<float>(ctx.packageCompletedBytes + currentItemBytes) / static_cast<float>(ctx.packageTotalBytes);
+        static_cast<float>(currentDone) / static_cast<float>(ctx.packageTotalBytes);
     float total = ctx.totalBytes == 0 ? 0.0f :
-        static_cast<float>(ctx.totalCompletedBytesBefore + ctx.packageCompletedBytes + currentItemBytes) /
+        static_cast<float>(totalDone) /
         static_cast<float>(ctx.totalBytes);
     if (current > 1.0f) current = 1.0f;
     if (total > 1.0f) total = 1.0f;

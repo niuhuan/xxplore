@@ -36,6 +36,21 @@ SDL_Color withAlpha(SDL_Color color, Uint8 alpha) {
     return color;
 }
 
+std::string formatInstallSpeed(uint64_t bytesPerSec) {
+    char buf[64];
+    if (bytesPerSec >= 1024ULL * 1024ULL) {
+        std::snprintf(buf, sizeof(buf), "%.1f MiB/s",
+                      static_cast<double>(bytesPerSec) / (1024.0 * 1024.0));
+    } else if (bytesPerSec >= 1024ULL) {
+        std::snprintf(buf, sizeof(buf), "%.1f KiB/s",
+                      static_cast<double>(bytesPerSec) / 1024.0);
+    } else {
+        std::snprintf(buf, sizeof(buf), "%llu B/s",
+                      static_cast<unsigned long long>(bytesPerSec));
+    }
+    return buf;
+}
+
 } // namespace
 
 void WebSocketInstallerScreen::open(const I18n& i18n) {
@@ -221,6 +236,7 @@ void WebSocketInstallerScreen::render(Renderer& renderer, FontManager& fm, const
     renderer.drawRoundedRect(cardX, cardY, cardW, cardH, 16, theme::MENU_BORDER);
 
     const int x = cardX + 24;
+    const int contentRight = x + (cardW - 48);
     int y = cardY + 20;
 
     fm.drawText(renderer.sdl(), i18n.t("websocket_installer.title"), x, y, theme::FONT_SIZE_TITLE,
@@ -361,6 +377,20 @@ void WebSocketInstallerScreen::render(Renderer& renderer, FontManager& fm, const
                     theme::FONT_SIZE_SMALL, theme::TEXT_SECONDARY);
         barY += 22;
         drawProgressBar(renderer, x, barY, cardW - 48, 18, server_.totalProgress());
+
+        uint64_t speedBytesPerSec = server_.speedBytesPerSec();
+        std::string speedText;
+        if (server_.speedFinished())
+            speedText = i18n.t("installer.speed_done");
+        else if (server_.hasSpeedSample())
+            speedText = formatInstallSpeed(speedBytesPerSec);
+        else if (server_.transferredBytes() == 0)
+            speedText = i18n.t("installer.speed_pending");
+        else
+            speedText = fs::formatSize(server_.transferredBytes());
+        int speedW = fm.measureText(speedText.c_str(), theme::FONT_SIZE_SMALL);
+        fm.drawText(renderer.sdl(), speedText.c_str(), contentRight - speedW,
+                    cardY + cardH - 32, theme::FONT_SIZE_SMALL, theme::TEXT_SECONDARY);
     } else {
         fm.drawText(renderer.sdl(), i18n.t("websocket_installer.close_server_hint"),
                     x, cardY + cardH - 32,
@@ -373,6 +403,13 @@ void WebSocketInstallerScreen::render(Renderer& renderer, FontManager& fm, const
         fm.drawText(renderer.sdl(), i18n.t("installer.cancel"), x + 16,
                     buttonY + (buttonH - theme::FONT_SIZE_ITEM) / 2,
                     theme::FONT_SIZE_ITEM, theme::TEXT);
+
+        if (server_.speedFinished()) {
+            const char* speedText = i18n.t("installer.speed_done");
+            int speedW = fm.measureText(speedText, theme::FONT_SIZE_SMALL);
+            fm.drawText(renderer.sdl(), speedText, contentRight - speedW,
+                        cardY + cardH - 32, theme::FONT_SIZE_SMALL, theme::TEXT_SECONDARY);
+        }
     }
 }
 

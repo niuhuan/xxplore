@@ -1,4 +1,5 @@
 #pragma once
+#include "util/byte_rate_meter.hpp"
 #include <atomic>
 #include <condition_variable>
 #include <cstdint>
@@ -35,6 +36,10 @@ public:
     size_t itemCount() const;
     std::string currentItem() const;
     WebInstallTarget target() const;
+    uint64_t speedBytesPerSec() const;
+    bool hasSpeedSample() const;
+    uint64_t transferredBytes() const;
+    bool speedFinished() const;
 
 private:
     struct RemoteFileEntry {
@@ -102,6 +107,7 @@ private:
     uint64_t totalBytes_ = 0;
     size_t itemCount_ = 0;
     std::string currentItem_;
+    util::ByteRateMeter speedMeter_;
 
     std::mutex sendMutex_;
     std::mutex sessionMutex_;

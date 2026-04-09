@@ -9,6 +9,7 @@
 #include <vector>
 
 #include "install/backend.hpp"
+#include "util/byte_rate_meter.hpp"
 
 namespace xxplore {
 
@@ -68,6 +69,7 @@ private:
     float                    totalProgress_   = 0.0f;
     std::string              currentStatus_;
     std::string              errorMessage_;
+    util::ByteRateMeter      speedMeter_;
     std::shared_ptr<InstallDataSourceCallbacks> sourceCallbacks_;
     mutable std::mutex       mutex_;
     std::thread              worker_;
