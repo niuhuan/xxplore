@@ -3,6 +3,7 @@
 #include "install/backend.hpp"
 #include "i18n/i18n.hpp"
 #include "ui/font_manager.hpp"
+#include "ui/panel_chrome.hpp"
 #include "ui/renderer.hpp"
 #include "ui/theme.hpp"
 #include "util/screen_awake.hpp"
@@ -278,6 +279,10 @@ InstallerAction InstallerScreen::handleInput(uint64_t kDown, const TouchTap* tap
             return InstallerAction::None;
 
         if (state_ == State::Finished) {
+            if (tap && tap->active &&
+                ui::panelCloseButtonHit(40, 40, theme::SCREEN_W - 80, tap->x, tap->y)) {
+                return InstallerAction::Close;
+            }
             if (kDown & HidNpadButton_Plus)
                 return InstallerAction::Close;
             return InstallerAction::None;
@@ -431,6 +436,8 @@ void InstallerScreen::render(Renderer& renderer, FontManager& fm, const I18n& i1
 
     fm.drawText(renderer.sdl(), i18n.t("installer.title"), x, y, theme::FONT_SIZE_TITLE,
                 theme::PRIMARY);
+    if (state == State::Finished)
+        ui::drawPanelCloseButton(renderer, cardX, cardY, cardW, false);
     y += 34;
 
     if (state == State::Loading) {

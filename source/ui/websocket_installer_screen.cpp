@@ -2,6 +2,7 @@
 #include "fs/fs_api.hpp"
 #include "i18n/i18n.hpp"
 #include "ui/font_manager.hpp"
+#include "ui/panel_chrome.hpp"
 #include "ui/renderer.hpp"
 #include "ui/theme.hpp"
 #include "util/screen_awake.hpp"
@@ -206,14 +207,8 @@ WebSocketInstallerAction WebSocketInstallerScreen::handleInput(uint64_t kDown,
 
     const int cardX = 40;
     const int cardY = 40;
-    const int cardH = theme::SCREEN_H - 80;
-    const int x = cardX + 24;
-    const int buttonW = 180;
-    const int buttonH = 42;
-    const int buttonX = x;
-    const int buttonY = cardY + cardH - 24 - buttonH;
-
-    if (tap && tap->active && pointInRect(tap, buttonX, buttonY, buttonW, buttonH))
+    if (tap && tap->active &&
+        ui::panelCloseButtonHit(cardX, cardY, theme::SCREEN_W - 80, tap->x, tap->y))
         return WebSocketInstallerAction::Close;
 
     if (kDown & (HidNpadButton_B | HidNpadButton_Plus))
@@ -241,6 +236,8 @@ void WebSocketInstallerScreen::render(Renderer& renderer, FontManager& fm, const
 
     fm.drawText(renderer.sdl(), i18n.t("websocket_installer.title"), x, y, theme::FONT_SIZE_TITLE,
                 theme::PRIMARY);
+    if (server_.isRunning() && !server_.isInstalling())
+        ui::drawPanelCloseButton(renderer, cardX, cardY, cardW, false);
     y += 34;
 
     if (!server_.isRunning()) {
@@ -395,14 +392,6 @@ void WebSocketInstallerScreen::render(Renderer& renderer, FontManager& fm, const
         fm.drawText(renderer.sdl(), i18n.t("websocket_installer.close_server_hint"),
                     x, cardY + cardH - 32,
                     theme::FONT_SIZE_SMALL, theme::TEXT_SECONDARY);
-        const int buttonW = 180;
-        const int buttonH = 42;
-        const int buttonY = cardY + cardH - 24 - buttonH;
-        renderer.drawRoundedRectFilled(x, buttonY, buttonW, buttonH, 10, theme::SURFACE);
-        renderer.drawRoundedRect(x, buttonY, buttonW, buttonH, 10, theme::DIVIDER);
-        fm.drawText(renderer.sdl(), i18n.t("installer.cancel"), x + 16,
-                    buttonY + (buttonH - theme::FONT_SIZE_ITEM) / 2,
-                    theme::FONT_SIZE_ITEM, theme::TEXT);
 
         if (server_.speedFinished()) {
             const char* speedText = i18n.t("installer.speed_done");

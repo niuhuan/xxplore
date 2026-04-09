@@ -16,6 +16,17 @@ void drawCloseGlyph(Renderer& renderer, int x, int y, int size, SDL_Color color)
 
 }
 
+void drawPanelCloseButton(Renderer& renderer, int cardX, int cardY, int cardW, bool closeFocused) {
+    const int btnX = cardX + cardW - 14 - kPanelCloseButtonSize;
+    const int btnY = cardY + (kPanelTitleBarH - kPanelCloseButtonSize) / 2;
+    SDL_Color bg = closeFocused ? theme::PRIMARY_DIM : theme::SURFACE;
+    SDL_Color border = closeFocused ? theme::PRIMARY : theme::DIVIDER;
+    SDL_Color glyph = closeFocused ? theme::ON_PRIMARY : theme::TEXT;
+    renderer.drawRoundedRectFilled(btnX, btnY, kPanelCloseButtonSize, kPanelCloseButtonSize, 10, bg);
+    renderer.drawRoundedRect(btnX, btnY, kPanelCloseButtonSize, kPanelCloseButtonSize, 10, border);
+    drawCloseGlyph(renderer, btnX, btnY, kPanelCloseButtonSize, glyph);
+}
+
 void drawPanelTitleBar(Renderer& renderer, FontManager& fm, int x, int y, int w,
                        const char* title, bool showCloseButton, bool closeFocused) {
     renderer.drawRoundedRectFilled(x, y, w, kPanelTitleBarH, 12, theme::HEADER_BG);
@@ -28,14 +39,7 @@ void drawPanelTitleBar(Renderer& renderer, FontManager& fm, int x, int y, int w,
     if (!showCloseButton)
         return;
 
-    const int btnX = x + w - 14 - kPanelCloseButtonSize;
-    const int btnY = y + (kPanelTitleBarH - kPanelCloseButtonSize) / 2;
-    SDL_Color bg = closeFocused ? theme::PRIMARY_DIM : theme::SURFACE;
-    SDL_Color border = closeFocused ? theme::PRIMARY : theme::DIVIDER;
-    SDL_Color glyph = closeFocused ? theme::ON_PRIMARY : theme::TEXT;
-    renderer.drawRoundedRectFilled(btnX, btnY, kPanelCloseButtonSize, kPanelCloseButtonSize, 10, bg);
-    renderer.drawRoundedRect(btnX, btnY, kPanelCloseButtonSize, kPanelCloseButtonSize, 10, border);
-    drawCloseGlyph(renderer, btnX, btnY, kPanelCloseButtonSize, glyph);
+    drawPanelCloseButton(renderer, x, y, w, closeFocused);
 }
 
 bool panelCloseButtonHit(int cardX, int cardY, int cardW, int tapX, int tapY) {
