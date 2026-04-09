@@ -948,6 +948,7 @@ public:
     }
 
     u64 write(const u8* ptr, u64 size) override {
+        // Phase 1: Read NCZ section header
         while (!sectionsInitialized) {
             if (buffer.size() < sizeof(u64) * 2) {
                 size_t need = sizeof(u64) * 2 - buffer.size();
@@ -981,15 +982,86 @@ public:
             }
         }
 
-        while (size > 0) {
-            u64 chunk = std::min<u64>(size, 0x1000000 - buffer.size());
-            append(buffer, ptr, chunk);
-            ptr += chunk;
-            size -= chunk;
-            if (buffer.size() >= 0x1000000) {
-                processChunk(buffer.data(), buffer.size());
-                buffer.clear();
+        // Phase 2: Detect solid vs NCZBLOCK compression mode.
+        if (compressionMode == CompressionMode::Detect) {
+            if (buffer.size() < kBlockMagic.size()) {
+                size_t take = std::min<u64>(kBlockMagic.size() - buffer.size(), size);
+                append(buffer, ptr, take);
+                ptr += take;
+                size -= take;
             }
+            if (buffer.size() < kBlockMagic.size())
+                return 0;
+
+            if (std::memcmp(buffer.data(), kBlockMagic.data(), kBlockMagic.size()) == 0) {
+                constexpr size_t kBlockHeaderBaseSize = 24;
+                if (buffer.size() < kBlockHeaderBaseSize) {
+                    size_t take = std::min<u64>(kBlockHeaderBaseSize - buffer.size(), size);
+                    append(buffer, ptr, take);
+                    ptr += take;
+                    size -= take;
+                }
+                if (buffer.size() < kBlockHeaderBaseSize)
+                    return 0;
+
+                u8 version = buffer[8];
+                u8 type = buffer[9];
+                u8 blockSizeExponent = buffer[11];
+                u32 numberOfBlocks = 0;
+                u64 decompressedSize = 0;
+                std::memcpy(&numberOfBlocks, buffer.data() + 12, sizeof(numberOfBlocks));
+                std::memcpy(&decompressedSize, buffer.data() + 16, sizeof(decompressedSize));
+                if (version != 2)
+                    XP_THROW("Unsupported NCZBLOCK version");
+                if (blockSizeExponent < 12 || blockSizeExponent > 30)
+                    XP_THROW("Invalid NCZBLOCK block size");
+                if (numberOfBlocks == 0)
+                    XP_THROW("Invalid NCZBLOCK block count");
+
+                size_t fullHeaderSize =
+                    kBlockHeaderBaseSize + static_cast<size_t>(numberOfBlocks) * sizeof(u32);
+                if (buffer.size() < fullHeaderSize) {
+                    size_t take = std::min<u64>(fullHeaderSize - buffer.size(), size);
+                    append(buffer, ptr, take);
+                    ptr += take;
+                    size -= take;
+                }
+                if (buffer.size() < fullHeaderSize)
+                    return 0;
+
+                blockSize = 1ULL << blockSizeExponent;
+                blockRemainingOutput = decompressedSize;
+                blockCompressedSizes.resize(numberOfBlocks);
+                std::memcpy(blockCompressedSizes.data(), buffer.data() + kBlockHeaderBaseSize,
+                            blockCompressedSizes.size() * sizeof(u32));
+                debugPrint("ncz", "NCZBLOCK blocks=%u block_size=%llu decompressed=%llu",
+                           numberOfBlocks,
+                           static_cast<unsigned long long>(blockSize),
+                           static_cast<unsigned long long>(blockRemainingOutput));
+                debugPrint("ncz", "NCZBLOCK type=%u", static_cast<unsigned int>(type));
+                consumeBuffer(fullHeaderSize);
+                compressionMode = CompressionMode::Block;
+            } else {
+                compressionMode = CompressionMode::Solid;
+            }
+        }
+
+        // Phase 3: Decompress or copy payload.
+        if (compressionMode == CompressionMode::Solid) {
+            while (size > 0) {
+                u64 chunk = std::min<u64>(size, 0x1000000 - buffer.size());
+                append(buffer, ptr, chunk);
+                ptr += chunk;
+                size -= chunk;
+                if (buffer.size() >= 0x1000000) {
+                    processChunk(buffer.data(), buffer.size());
+                    buffer.clear();
+                }
+            }
+        } else if (compressionMode == CompressionMode::Block) {
+            if (size > 0)
+                append(buffer, ptr, static_cast<size_t>(size));
+            processBlockBuffer();
         }
         return 0;
     }
@@ -1001,8 +1073,17 @@ public:
 
         if (!sectionsInitialized && !buffer.empty())
             XP_THROW("Incomplete NCZ header");
-        if (!buffer.empty())
+        if (compressionMode == CompressionMode::Detect && !buffer.empty())
+            XP_THROW("Incomplete NCZ compression header");
+        if (compressionMode == CompressionMode::Solid && !buffer.empty())
             processChunk(buffer.data(), buffer.size());
+        if (compressionMode == CompressionMode::Block) {
+            processBlockBuffer();
+            if (currentBlockIndex != blockCompressedSizes.size() || blockRemainingOutput != 0)
+                XP_THROW("Incomplete NCZBLOCK stream");
+            if (!buffer.empty())
+                XP_THROW("Unexpected trailing NCZBLOCK data");
+        }
         if (!deflateBuffer.empty())
             encrypt(deflateBuffer.data(), deflateBuffer.size(), currentOffset);
         flush();
@@ -1069,6 +1150,57 @@ private:
         std::memcpy(out.data() + oldSize, src, size);
     }
 
+    void consumeBuffer(size_t size) {
+        if (size == 0)
+            return;
+        if (size > buffer.size())
+            XP_THROW("NCZ internal buffer underflow");
+        buffer.erase(buffer.begin(), buffer.begin() + static_cast<std::ptrdiff_t>(size));
+    }
+
+    void appendOutput(const u8* ptr, size_t size) {
+        while (size > 0) {
+            size_t writeChunk = std::min<size_t>(0x1000000 - deflateBuffer.size(), size);
+            append(deflateBuffer, ptr, writeChunk);
+            if (deflateBuffer.size() >= 0x1000000) {
+                encrypt(deflateBuffer.data(), deflateBuffer.size(), currentOffset);
+                flush();
+            }
+            ptr += writeChunk;
+            size -= writeChunk;
+        }
+    }
+
+    void processBlockBuffer() {
+        while (currentBlockIndex < blockCompressedSizes.size()) {
+            u32 compressedSize = blockCompressedSizes[currentBlockIndex];
+            size_t expectedSize = static_cast<size_t>(std::min<u64>(blockSize, blockRemainingOutput));
+            if (compressedSize == 0 || expectedSize == 0)
+                XP_THROW("Invalid NCZBLOCK block size");
+            if (buffer.size() < compressedSize)
+                return;
+
+            if (compressedSize == expectedSize) {
+                appendOutput(buffer.data(), expectedSize);
+            } else {
+                if (compressedSize > expectedSize)
+                    XP_THROW("Invalid NCZBLOCK compressed block size");
+                std::vector<u8> out(expectedSize);
+                size_t ret = ZSTD_decompressDCtx(dctx, out.data(), out.size(), buffer.data(),
+                                                compressedSize);
+                if (ZSTD_isError(ret))
+                    XP_THROW(ZSTD_getErrorName(ret));
+                if (ret != expectedSize)
+                    XP_THROW("NCZBLOCK decompressed block size mismatch");
+                appendOutput(out.data(), out.size());
+            }
+
+            consumeBuffer(compressedSize);
+            blockRemainingOutput -= expectedSize;
+            currentBlockIndex++;
+        }
+    }
+
     SectionContext& section(u64 offset) {
         if (sections.empty())
             XP_THROW("NCZ section table is empty");
@@ -1111,28 +1243,30 @@ private:
                 size_t ret = ZSTD_decompressStream(dctx, &output, &input);
                 if (ZSTD_isError(ret))
                     XP_THROW(ZSTD_getErrorName(ret));
-                size_t len = output.pos;
-                u8* outPtr = out.data();
-                while (len > 0) {
-                    size_t writeChunk = std::min<size_t>(0x1000000 - deflateBuffer.size(), len);
-                    append(deflateBuffer, outPtr, writeChunk);
-                    if (deflateBuffer.size() >= 0x1000000) {
-                        encrypt(deflateBuffer.data(), deflateBuffer.size(), currentOffset);
-                        flush();
-                    }
-                    outPtr += writeChunk;
-                    len -= writeChunk;
-                }
+                appendOutput(out.data(), output.pos);
             }
             size -= readChunk;
             ptr += readChunk;
         }
     }
 
+    enum class CompressionMode {
+        Detect,
+        Solid,
+        Block,
+    };
+
+    static constexpr std::array<char, 8> kBlockMagic = { 'N', 'C', 'Z', 'B', 'L', 'O', 'C', 'K' };
+
     ZSTD_DCtx* dctx = nullptr;
     std::vector<u8> buffer;
     std::vector<u8> deflateBuffer;
     bool sectionsInitialized = false;
+    CompressionMode compressionMode = CompressionMode::Detect;
+    u64 blockSize = 0;
+    u64 blockRemainingOutput = 0;
+    std::vector<u32> blockCompressedSizes;
+    size_t currentBlockIndex = 0;
     bool closed = false;
     std::vector<SectionContext*> sections;
 };
