@@ -29,7 +29,7 @@ BIN_BASE	:=	xxplore
 #---------------------------------------------------------------------------------
 
 # uncomment to enable debug mode
-# DEFINES	+=	-DXPLORE_DEBUG
+# DEFINES	+=	-DXXPLORE_DEBUG
 
 ARCH	:=	-march=armv8-a+crc+crypto -mtune=cortex-a57 -mtp=soft -fPIE
 
@@ -49,11 +49,11 @@ LIBS	+=	-lzstd
 LIBS	+=	`$(PREFIX)pkg-config --libs libcurl` -lmbedtls -lmbedx509 -lmbedcrypto
 
 LIBS	+=	-lsmb2
-ifeq ($(findstring -DXPLORE_DEBUG,$(DEFINES)),-DXPLORE_DEBUG)
-LIBS	+=	-lusbhsfsd
-else
+#ifeq ($(findstring -DXXPLORE_DEBUG,$(DEFINES)),-DXXPLORE_DEBUG)
+#LIBS	+=	-lusbhsfsd
+#else
 LIBS	+=	-lusbhsfs
-endif
+#endif
 LIBS	+=	-lntfs-3g -llwext4
 LIBS	+=	-lnx
 

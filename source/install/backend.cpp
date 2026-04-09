@@ -25,7 +25,7 @@ namespace xxplore {
 namespace {
 
 void debugPrint(const char* tag, const char* fmt, ...) {
-#ifdef XPLORE_DEBUG
+#ifdef XXPLORE_DEBUG
     std::printf("[%s] ", tag);
     va_list args;
     va_start(args, fmt);
@@ -41,7 +41,7 @@ void debugPrint(const char* tag, const char* fmt, ...) {
 [[noreturn]] void throwFormatted(const char* func, int line, const std::string& msg) {
     char buf[512];
     std::snprintf(buf, sizeof(buf), "%s:%d: %s", func, line, msg.c_str());
-#ifdef XPLORE_DEBUG
+#ifdef XXPLORE_DEBUG
     std::printf("[install-error] %s\n", buf);
 #endif
     throw std::runtime_error(buf);
@@ -58,7 +58,7 @@ void debugPrint(const char* tag, const char* fmt, ...) {
         } \
     } while (0)
 
-#ifdef XPLORE_DEBUG
+#ifdef XXPLORE_DEBUG
 [[maybe_unused]] void printBytes(u8* bytes, size_t size, bool includeHeader) {
     if (includeHeader) {
         std::printf("\n\n00 01 02 03 04 05 06 07 08 09 0A 0B 0C 0D 0E 0F\n");
@@ -75,7 +75,7 @@ void debugPrint(const char* tag, const char* fmt, ...) {
 [[maybe_unused]] void printBytes(u8*, size_t, bool) {}
 #endif
 
-#ifdef XPLORE_DEBUG
+#ifdef XXPLORE_DEBUG
 #define LOG_DEBUG(format, ...) \
     do { \
         std::printf("%s:%d: ", __func__, __LINE__); \
@@ -1229,7 +1229,7 @@ bool isRemotePath(const std::string& path) {
 }
 
 void emitLog(const InstallBackendCallbacks& callbacks, const std::string& line) {
-#ifdef XPLORE_DEBUG
+#ifdef XXPLORE_DEBUG
     std::printf("[install-log] %s\n", line.c_str());
 #endif
     if (callbacks.onLog)
@@ -1237,7 +1237,7 @@ void emitLog(const InstallBackendCallbacks& callbacks, const std::string& line) 
 }
 
 void emitStatus(const InstallBackendCallbacks& callbacks, const std::string& status) {
-#ifdef XPLORE_DEBUG
+#ifdef XXPLORE_DEBUG
     std::printf("[install-status] %s\n", status.c_str());
 #endif
     if (callbacks.onStatus)

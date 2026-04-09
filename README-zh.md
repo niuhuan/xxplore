@@ -51,10 +51,10 @@ uv pip install fonttools brotli
 uv run python scripts/subset_font.py
 
 # 4. 编译
-make DEFINES=-DXPLORE_DEBUG
+make DEFINES=-DXXPLORE_DEBUG
 
 # 5. 或生成分发目录
-make DEFINES=-DXPLORE_DEBUG dist
+make DEFINES=-DXXPLORE_DEBUG dist
 ```
 
 生成的 `xxplore.nro` 可通过 hbmenu 运行。
@@ -94,7 +94,7 @@ sudo make -f Makefile.platform switch_install
 
 ### DEBUG MODE
 ```shell
-make DEFINES=-DXPLORE_DEBUG
+make DEFINES=-DXXPLORE_DEBUG
 ```
 
 ## 协议

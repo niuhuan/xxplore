@@ -51,10 +51,10 @@ uv pip install fonttools brotli
 uv run python scripts/subset_font.py
 
 # 4. Build
-make DEFINES=-DXPLORE_DEBUG
+make DEFINES=-DXXPLORE_DEBUG
 
 # 5. Or build a distributable folder
-make DEFINES=-DXPLORE_DEBUG dist
+make DEFINES=-DXXPLORE_DEBUG dist
 ```
 
 The generated `xxplore.nro` can then be launched from hbmenu.
@@ -94,7 +94,7 @@ After installation, rebuild Xxplore.
 ### Debug Mode
 
 ```bash
-make DEFINES=-DXPLORE_DEBUG
+make DEFINES=-DXXPLORE_DEBUG
 ```
 
 ## License

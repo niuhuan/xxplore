@@ -474,7 +474,7 @@ enum class PendingConfirm { None, DeleteItems, PasteChoice, DeleteDrive, Unmount
 
 int Application::run(int argc, char* argv[]) {
     (void)argc;
-#ifdef XPLORE_DEBUG
+#ifdef XXPLORE_DEBUG
     socketInitializeDefault();
     nxlinkStdio();
 #endif
@@ -491,7 +491,7 @@ int Application::run(int argc, char* argv[]) {
     const std::string selectedFontPath =
         fileExists(externalFontPath) ? externalFontPath : "romfs:/fonts/xxplore.ttf";
 
-#ifdef XPLORE_DEBUG
+#ifdef XXPLORE_DEBUG
     std::printf("Font: path=%s cache_limit=%zuKB\n",
                 selectedFontPath.c_str(), fontGlyphCacheLimit / 1024U);
 #endif
@@ -538,7 +538,7 @@ int Application::run(int argc, char* argv[]) {
     {
         std::string usbErr;
         if (!usbDriveManager.init(usbErr)) {
-#ifdef XPLORE_DEBUG
+#ifdef XXPLORE_DEBUG
             std::printf("USB: init skipped (%s)\n", usbErr.c_str());
 #endif
         } else {
@@ -737,7 +737,7 @@ int Application::run(int argc, char* argv[]) {
         pendingPanelLoad.finished = false;
 
         loadingOverlay.show(i18n.t("loading.connecting"), 15000, 180);
-#ifdef XPLORE_DEBUG
+#ifdef XXPLORE_DEBUG
         std::printf("[nav] async load start panel=%s path=%s\n",
                     panel == PANEL_LEFT ? "left" : "right", targetPath.c_str());
 #endif
@@ -1973,14 +1973,14 @@ int Application::run(int argc, char* argv[]) {
                 loadingOverlay.hide();
 
                 if (!loadErr.empty()) {
-#ifdef XPLORE_DEBUG
+#ifdef XXPLORE_DEBUG
                     std::printf("[nav] async load failed path=%s err=%s\n", loadPath.c_str(),
                                 loadErr.c_str());
 #endif
                     toast.show(i18n.t("error.operation_failed"), loadErr.c_str(),
                                ToastKind::Error, 3200);
                 } else {
-#ifdef XPLORE_DEBUG
+#ifdef XXPLORE_DEBUG
                     std::printf("[nav] async load done path=%s count=%zu\n", loadPath.c_str(),
                                 loadedItems.size());
 #endif
@@ -2047,7 +2047,7 @@ int Application::run(int argc, char* argv[]) {
     fontManager.shutdown();
     renderer.shutdown();
     romfsExit();
-#ifdef XPLORE_DEBUG
+#ifdef XXPLORE_DEBUG
     socketExit();
 #endif
     return 0;

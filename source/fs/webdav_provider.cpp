@@ -13,7 +13,7 @@ namespace fs {
 namespace {
 
 void debugLog(const char* fmt, ...) {
-#ifdef XPLORE_DEBUG
+#ifdef XXPLORE_DEBUG
     std::va_list args;
     va_start(args, fmt);
     std::printf("[webdav] ");

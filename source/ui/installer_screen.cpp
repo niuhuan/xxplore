@@ -100,7 +100,7 @@ std::vector<std::string> InstallerScreen::sourceDirectories() const {
 void InstallerScreen::appendLog(std::string line) {
     if (line.empty())
         return;
-#ifdef XPLORE_DEBUG
+#ifdef XXPLORE_DEBUG
     std::printf("[installer-ui] %s\n", line.c_str());
 #endif
     static constexpr size_t kMaxLogs = 30;

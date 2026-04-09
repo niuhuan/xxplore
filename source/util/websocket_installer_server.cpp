@@ -493,7 +493,7 @@ void WebSocketInstallerServer::installWorkerMain(std::vector<RemoteFileEntry> it
 void WebSocketInstallerServer::appendLog(const std::string& line) {
     if (line.empty())
         return;
-#ifdef XPLORE_DEBUG
+#ifdef XXPLORE_DEBUG
     std::printf("[web-install] %s\n", line.c_str());
 #endif
     std::lock_guard<std::mutex> lock(mutex_);
