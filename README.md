@@ -12,6 +12,7 @@ English | [中文](README-zh.md)
 - Installer buffering with non-linear read/write, keeping network installs fast as well.
 - Built-in HTTP server so a PC browser can install software to the Switch without any extra desktop software.
 - External font support for displaying CJK filenames from drives other than the SD card.
+- The dual-threaded, buffered streaming mode enables faster file copying speeds.
 
 ## Screenshots
 
