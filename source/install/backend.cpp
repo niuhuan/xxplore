@@ -2196,6 +2196,59 @@ uint64_t sumWorkBytes(const install::xci::XCI& package) {
     return total == 0 ? 1 : total;
 }
 
+constexpr uint64_t kInstallFreeSpaceReserveBytes = 500ULL * 1024ULL * 1024ULL;
+
+uint64_t queryInstallTargetFreeBytes(NcmStorageId storageId) {
+    Result rc = nsInitialize();
+    if (R_FAILED(rc)) {
+        char buf[128];
+        std::snprintf(buf, sizeof(buf), "Failed to initialize NS storage query (0x%08x)", rc);
+        XP_THROW(buf);
+    }
+
+    s64 freeBytes = 0;
+    rc = nsGetFreeSpaceSize(storageId, &freeBytes);
+    nsExit();
+    if (R_FAILED(rc)) {
+        char buf[128];
+        std::snprintf(buf, sizeof(buf), "Failed to query free space (0x%08x)", rc);
+        XP_THROW(buf);
+    }
+    if (freeBytes < 0)
+        return 0;
+    return static_cast<uint64_t>(freeBytes);
+}
+
+void ensurePackageFitsTarget(const InstallQueueItem& item, NcmStorageId storageId) {
+    uint64_t packageBytes = item.size;
+    if (packageBytes == 0)
+        XP_THROW("Install package size is unknown");
+
+    uint64_t requiredBytes = packageBytes + kInstallFreeSpaceReserveBytes;
+    if (requiredBytes < packageBytes)
+        XP_THROW("Install size overflow");
+
+    uint64_t freeBytes = queryInstallTargetFreeBytes(storageId);
+    debugPrint("install", "space check name=%s free=%llu required=%llu package=%llu reserve=%llu",
+               item.name.c_str(),
+               static_cast<unsigned long long>(freeBytes),
+               static_cast<unsigned long long>(requiredBytes),
+               static_cast<unsigned long long>(packageBytes),
+               static_cast<unsigned long long>(kInstallFreeSpaceReserveBytes));
+    if (freeBytes < requiredBytes) {
+        std::string target =
+            storageId == NcmStorageId_BuiltInUser ? "NAND" :
+            (storageId == NcmStorageId_SdCard ? "SD Card" : "target storage");
+        char buf[256];
+        std::snprintf(buf, sizeof(buf),
+                      "Not enough free space on %s: need %llu bytes + 500 MiB reserve, have %llu bytes",
+                      target.c_str(),
+                      static_cast<unsigned long long>(packageBytes),
+                      static_cast<unsigned long long>(freeBytes));
+        XP_THROW(buf);
+    }
+}
+
 } // namespace
 
 bool runInstallQueue(const std::vector<InstallQueueItem>& items, bool installToNand,
@@ -2258,6 +2311,8 @@ bool runInstallQueue(const std::vector<InstallQueueItem>& items, bool installToN
                        items[i].path.c_str());
             emitLog(callbacks, "Preparing " + items[i].name);
             emitStatus(callbacks, items[i].name);
+
+            ensurePackageFitsTarget(items[i], storageId);
 
             gStreamProgress.callbacks = &callbacks;
             gStreamProgress.packageCompletedBytes = 0;
