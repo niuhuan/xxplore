@@ -360,9 +360,8 @@ std::string formatSize(uint64_t bytes) {
         ++unit;
     }
 
-    if (unit == 0) {
-        return addThousands(std::to_string(static_cast<unsigned long long>(bytes))) + "   B";
-    }
+    if (unit == 0)
+        return addThousands(std::to_string(static_cast<unsigned long long>(bytes))) + ".0 B";
 
     char raw[64];
     std::snprintf(raw, sizeof(raw), "%.1f", value);

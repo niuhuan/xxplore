@@ -210,12 +210,15 @@ void FileList::updateCache(Renderer& renderer, FontManager& fontManager,
                                  theme::ICON_SIZE, theme::ICON_SIZE);
         }
 
-        std::string sizeText = "--";
+        std::string sizeText;
         if (!items[i].label.empty() && items[i].label != "..") {
-            if (items[i].isDirectory || !items[i].hasSize)
+            if (!selectionEnabled && items[i].isDirectory && !items[i].hasSize) {
+                sizeText.clear();
+            } else if (items[i].isDirectory || !items[i].hasSize) {
                 sizeText = "--";
-            else
+            } else {
                 sizeText = fs::formatSize(items[i].size);
+            }
         }
         int sizeW = fontManager.measureText(sizeText.c_str(), sizeFont);
         int sizeX = sizeRightX - sizeW;
