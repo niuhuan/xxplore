@@ -15,6 +15,7 @@ struct InstallBackendCallbacks {
     std::function<void(float currentProgress, float totalProgress)> onProgress;
     std::function<void(uint64_t currentItemBytes, uint64_t currentItemTotal,
                        uint64_t totalBytesDone, uint64_t totalBytesTotal)> onProgressBytes;
+    std::function<bool()> shouldAbort;
 };
 
 struct InstallDataSourceCallbacks {

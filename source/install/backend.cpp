@@ -24,6 +24,8 @@ namespace xxplore {
 
 namespace {
 
+constexpr const char* kInstallAbortMessage = "Install aborted by user";
+
 void debugPrint(const char* tag, const char* fmt, ...) {
 #ifdef XXPLORE_DEBUG
     std::printf("[%s] ", tag);
@@ -36,6 +38,13 @@ void debugPrint(const char* tag, const char* fmt, ...) {
     (void)tag;
     (void)fmt;
 #endif
+}
+
+const InstallBackendCallbacks* gActiveInstallCallbacks = nullptr;
+
+bool isInstallAbortRequested() {
+    return gActiveInstallCallbacks && gActiveInstallCallbacks->shouldAbort &&
+           gActiveInstallCallbacks->shouldAbort();
 }
 
 [[noreturn]] void throwFormatted(const char* func, int line, const std::string& msg) {
@@ -57,6 +66,11 @@ void debugPrint(const char* tag, const char* fmt, ...) {
             throwFormatted(__func__, __LINE__, _buf); \
         } \
     } while (0)
+
+void checkInstallAbortRequested() {
+    if (isInstallAbortRequested())
+        XP_THROW(kInstallAbortMessage);
+}
 
 #ifdef XXPLORE_DEBUG
 [[maybe_unused]] void printBytes(u8* bytes, size_t size, bool includeHeader) {
@@ -1498,6 +1512,10 @@ public:
             errOut = "Install data source unavailable";
             return false;
         }
+        if (isInstallAbortRequested()) {
+            errOut = kInstallAbortMessage;
+            return false;
+        }
 
         if (maxBlocks_ <= 1) {
             bool ok = readFn_(startOffset_ + bytesConsumed_, size, outBuffer, errOut);
@@ -1518,6 +1536,10 @@ public:
                 return false;
             }
             if (queue_.empty()) {
+                if (isInstallAbortRequested()) {
+                    errOut = kInstallAbortMessage;
+                    return false;
+                }
                 errOut = "Remote prefetch ended unexpectedly";
                 return false;
             }
@@ -1563,6 +1585,13 @@ private:
 
     void workerLoop() {
         for (;;) {
+            if (isInstallAbortRequested()) {
+                std::lock_guard<std::mutex> lock(mutex_);
+                producerError_ = kInstallAbortMessage;
+                producerDone_ = true;
+                cvNotEmpty_.notify_all();
+                break;
+            }
             uint64_t offset = 0;
             size_t size = 0;
             {
@@ -1636,8 +1665,10 @@ public:
     virtual ~InstallTask() = default;
 
     void Prepare() {
+        checkInstallAbortRequested();
         auto cnmtList = ReadCNMT();
         for (size_t i = 0; i < cnmtList.size(); i++) {
+            checkInstallAbortRequested();
             auto [contentMeta, cnmtContentInfo] = cnmtList[i];
             contentMetas.push_back(contentMeta);
             nxncm::ContentStorage contentStorage(destStorageId);
@@ -1652,13 +1683,16 @@ public:
 
     void Begin() {
         try {
+            checkInstallAbortRequested();
             InstallTicketCert();
         } catch (const std::runtime_error& e) {
             LOG_DEBUG("Ticket install warning: %s\n", e.what());
         }
         for (auto& contentMeta : contentMetas) {
-            for (auto& record : contentMeta.GetContentInfos())
+            for (auto& record : contentMeta.GetContentInfos()) {
+                checkInstallAbortRequested();
                 InstallNCA(record.content_id);
+            }
         }
     }
 
@@ -1740,6 +1774,7 @@ public:
 
         beginContainerEntry(ncaFileName, ncaSize);
         while (fileOff < ncaSize) {
+            checkInstallAbortRequested();
             size_t chunk = readSize;
             if (fileOff + chunk >= ncaSize)
                 chunk = static_cast<size_t>(ncaSize - fileOff);
@@ -1820,6 +1855,7 @@ public:
 
         beginContainerEntry(ncaFileName, ncaSize);
         while (fileOff < ncaSize) {
+            checkInstallAbortRequested();
             size_t chunk = readSize;
             if (fileOff + chunk >= ncaSize)
                 chunk = static_cast<size_t>(ncaSize - fileOff);
@@ -1892,6 +1928,7 @@ public:
 
         beginContainerEntry(ncaFileName, ncaSize);
         while (fileOff < ncaSize) {
+            checkInstallAbortRequested();
             size_t chunk = readSize;
             if (fileOff + chunk >= ncaSize)
                 chunk = static_cast<size_t>(ncaSize - fileOff);
@@ -1957,6 +1994,7 @@ public:
 
         beginContainerEntry(ncaFileName, ncaSize);
         while (fileOff < ncaSize) {
+            checkInstallAbortRequested();
             size_t chunk = readSize;
             if (fileOff + chunk >= ncaSize)
                 chunk = static_cast<size_t>(ncaSize - fileOff);
@@ -2300,6 +2338,7 @@ bool runInstallQueue(const std::vector<InstallQueueItem>& items, bool installToN
     uint64_t completedBytes = 0;
 
     try {
+        gActiveInstallCallbacks = &callbacks;
         ncmInitialize();
         ipc::nsextInitialize();
         ipc::esInitialize();
@@ -2307,6 +2346,7 @@ bool runInstallQueue(const std::vector<InstallQueueItem>& items, bool installToN
         splInitialize();
 
         for (size_t i = 0; i < items.size(); i++) {
+            checkInstallAbortRequested();
             debugPrint("install", "begin package name=%s path=%s", items[i].name.c_str(),
                        items[i].path.c_str());
             emitLog(callbacks, "Preparing " + items[i].name);
@@ -2367,6 +2407,7 @@ bool runInstallQueue(const std::vector<InstallQueueItem>& items, bool installToN
         ipc::esExit();
         ipc::nsextExit();
         ncmExit();
+        gActiveInstallCallbacks = nullptr;
         debugPrint("install", "queue finished success");
         return true;
     } catch (const std::exception& e) {
@@ -2379,6 +2420,7 @@ bool runInstallQueue(const std::vector<InstallQueueItem>& items, bool installToN
         ipc::esExit();
         ipc::nsextExit();
         ncmExit();
+        gActiveInstallCallbacks = nullptr;
         return false;
     }
 }

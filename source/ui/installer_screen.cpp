@@ -16,6 +16,8 @@ namespace xxplore {
 
 namespace {
 
+constexpr int kTitleActionButtonW = 132;
+
 void drawProgressBar(Renderer& renderer, int x, int y, int w, int h, float progress) {
     if (progress < 0.0f)
         progress = 0.0f;
@@ -56,7 +58,7 @@ std::string formatInstallSpeed(uint64_t bytesPerSec) {
 } // namespace
 
 void InstallerScreen::open(std::vector<InstallQueueItem> items, InstallDeleteMode deleteMode,
-                           bool appletMode,
+                           bool appletMode, const I18n& i18n,
                            std::shared_ptr<InstallDataSourceCallbacks> sourceCallbacks) {
     joinWorker();
     {
@@ -79,6 +81,12 @@ void InstallerScreen::open(std::vector<InstallQueueItem> items, InstallDeleteMod
         totalProgress_   = 0.0f;
         currentStatus_.clear();
         errorMessage_.clear();
+        interruptButtonLabel_ = std::string(i18n.t("installer.abort_button")) + " (-)";
+        interruptConfirmTitle_ = i18n.t("installer.abort_confirm_title");
+        interruptConfirmBody_ = i18n.t("installer.abort_confirm_body");
+        abortedByUser_    = false;
+        abortRequested_.store(false);
+        interruptConfirm_.close();
         speedMeter_.reset();
         sourceCallbacks_ = std::move(sourceCallbacks);
     }
@@ -95,6 +103,12 @@ void InstallerScreen::close() {
     logs_.clear();
     currentStatus_.clear();
     errorMessage_.clear();
+    interruptButtonLabel_.clear();
+    interruptConfirmTitle_.clear();
+    interruptConfirmBody_.clear();
+    abortedByUser_ = false;
+    abortRequested_.store(false);
+    interruptConfirm_.close();
     sourceCallbacks_.reset();
 }
 
@@ -151,6 +165,9 @@ void InstallerScreen::startInstallWorker() {
         totalProgress_ = 0.0f;
         currentStatus_.clear();
         errorMessage_.clear();
+        abortedByUser_ = false;
+        abortRequested_.store(false);
+        interruptConfirm_.close();
         speedMeter_.reset();
     }
 
@@ -183,15 +200,20 @@ void InstallerScreen::startInstallWorker() {
             std::lock_guard<std::mutex> lock(mutex_);
             speedMeter_.update(totalBytesDone, static_cast<uint64_t>(std::time(nullptr)));
         };
+        callbacks.shouldAbort = [this]() {
+            return abortRequested_.load();
+        };
 
         std::string err;
         bool ok = runInstallQueue(items, installToNand, deleteAfterInstall, callbacks, err,
                                   sourceCallbacks.get());
+        bool abortedByUser = !ok && abortRequested_.load();
 
         std::lock_guard<std::mutex> lock(mutex_);
         currentProgress_ = ok ? 1.0f : currentProgress_;
         totalProgress_ = ok ? 1.0f : totalProgress_;
         currentStatus_.clear();
+        abortedByUser_ = abortedByUser;
         if (ok) {
             state_ = State::Finished;
             speedMeter_.markFinished(static_cast<uint64_t>(std::time(nullptr)));
@@ -200,7 +222,7 @@ void InstallerScreen::startInstallWorker() {
             logs_.push_back("Install completed.");
         } else {
             state_ = State::Failed;
-            errorMessage_ = std::move(err);
+            errorMessage_ = abortedByUser ? "Install aborted by user." : std::move(err);
             if (!errorMessage_.empty()) {
                 if (logs_.size() >= 30)
                     logs_.pop_front();
@@ -267,6 +289,29 @@ void InstallerScreen::update() {
 
 InstallerAction InstallerScreen::handleInput(uint64_t kDown, const TouchTap* tap) {
     bool shouldStartInstall = false;
+    State state = State::Closed;
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (!open_)
+            return InstallerAction::None;
+        state = state_;
+    }
+
+    if (interruptConfirm_.isOpen() && state != State::Running)
+        interruptConfirm_.close();
+
+    if (interruptConfirm_.isOpen()) {
+        ConfirmResult result = interruptConfirm_.handleInput(kDown, tap);
+        if (result == ConfirmResult::Confirmed) {
+            abortRequested_.store(true);
+            appendLog("Install interrupt requested.");
+            interruptConfirm_.close();
+        } else if (result == ConfirmResult::Cancelled) {
+            interruptConfirm_.close();
+        }
+        return InstallerAction::None;
+    }
+
     {
         std::lock_guard<std::mutex> lock(mutex_);
         if (!open_)
@@ -276,7 +321,7 @@ InstallerAction InstallerScreen::handleInput(uint64_t kDown, const TouchTap* tap
             return InstallerAction::None;
 
         if (state_ == State::Running)
-            return InstallerAction::None;
+            state = State::Running;
 
         if (state_ == State::Finished) {
             if (tap && tap->active &&
@@ -289,6 +334,10 @@ InstallerAction InstallerScreen::handleInput(uint64_t kDown, const TouchTap* tap
         }
 
         if (state_ == State::Failed) {
+            if (tap && tap->active &&
+                ui::panelCloseButtonHit(40, 40, theme::SCREEN_W - 80, tap->x, tap->y)) {
+                return InstallerAction::Close;
+            }
             if (kDown & (HidNpadButton_B | HidNpadButton_Plus))
                 return InstallerAction::Close;
             return InstallerAction::None;
@@ -327,6 +376,20 @@ InstallerAction InstallerScreen::handleInput(uint64_t kDown, const TouchTap* tap
                 buttonFocusCol_ = 1;
                 shouldStartInstall = true;
             }
+        }
+
+        if (state_ == State::Running) {
+            if (kDown & HidNpadButton_Minus) {
+                interruptConfirm_.open(interruptConfirmTitle_, interruptConfirmBody_);
+                return InstallerAction::None;
+            }
+            if (tap && tap->active &&
+                ui::panelTextButtonHit(40, 40, theme::SCREEN_W - 80, kTitleActionButtonW,
+                                       tap->x, tap->y)) {
+                interruptConfirm_.open(interruptConfirmTitle_, interruptConfirmBody_);
+                return InstallerAction::None;
+            }
+            return InstallerAction::None;
         }
 
         if (kDown & HidNpadButton_B)
@@ -391,6 +454,7 @@ void InstallerScreen::render(Renderer& renderer, FontManager& fm, const I18n& i1
     float totalProgress = 0.0f;
     std::string currentStatus;
     std::string errorMessage;
+    bool abortedByUser = false;
     uint64_t speedBytesPerSec = 0;
     bool hasSpeedSample = false;
     uint64_t transferredBytes = 0;
@@ -413,6 +477,7 @@ void InstallerScreen::render(Renderer& renderer, FontManager& fm, const I18n& i1
         totalProgress = totalProgress_;
         currentStatus = currentStatus_;
         errorMessage = errorMessage_;
+        abortedByUser = abortedByUser_;
         speedBytesPerSec = speedMeter_.rateBytesPerSec(nowSec);
         hasSpeedSample = speedMeter_.hasRate(nowSec);
         transferredBytes = speedMeter_.latestTotalBytes();
@@ -436,8 +501,11 @@ void InstallerScreen::render(Renderer& renderer, FontManager& fm, const I18n& i1
 
     fm.drawText(renderer.sdl(), i18n.t("installer.title"), x, y, theme::FONT_SIZE_TITLE,
                 theme::PRIMARY);
-    if (state == State::Finished)
+    if (state == State::Finished || state == State::Failed)
         ui::drawPanelCloseButton(renderer, cardX, cardY, cardW, false);
+    else if (state == State::Running)
+        ui::drawPanelTextButton(renderer, fm, cardX, cardY, cardW, kTitleActionButtonW,
+                                interruptButtonLabel_.c_str(), false);
     y += 34;
 
     if (state == State::Loading) {
@@ -602,7 +670,9 @@ void InstallerScreen::render(Renderer& renderer, FontManager& fm, const I18n& i1
                             cardY + cardH - 52, theme::FONT_SIZE_SMALL, theme::TEXT_SECONDARY,
                             cardW - 48);
         if (!errorMessage.empty()) {
-            fm.drawTextEllipsis(renderer.sdl(), errorMessage.c_str(), x + 220, cardY + cardH - 30,
+            const char* displayError = abortedByUser ? i18n.t("installer.abort_result")
+                                                     : errorMessage.c_str();
+            fm.drawTextEllipsis(renderer.sdl(), displayError, x + 220, cardY + cardH - 30,
                                 theme::FONT_SIZE_SMALL, theme::DANGER, cardW - 260);
         }
         fm.drawText(renderer.sdl(), i18n.t("installer.failed_hint"), x, cardY + cardH - 30,
@@ -622,6 +692,8 @@ void InstallerScreen::render(Renderer& renderer, FontManager& fm, const I18n& i1
                     x + (cardW - 48) - speedW, cardY + cardH - 32,
                     theme::FONT_SIZE_SMALL, theme::TEXT_SECONDARY);
     }
+
+    interruptConfirm_.render(renderer, fm, i18n);
 }
 
 } // namespace xxplore

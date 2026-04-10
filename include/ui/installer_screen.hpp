@@ -9,7 +9,9 @@
 #include <vector>
 
 #include "install/backend.hpp"
+#include "ui/modals.hpp"
 #include "util/byte_rate_meter.hpp"
+#include <atomic>
 
 namespace xxplore {
 
@@ -32,6 +34,7 @@ public:
     ~InstallerScreen() { joinWorker(); }
 
     void open(std::vector<InstallQueueItem> items, InstallDeleteMode deleteMode, bool appletMode,
+              const I18n& i18n,
               std::shared_ptr<InstallDataSourceCallbacks> sourceCallbacks = nullptr);
     void close();
 
@@ -69,6 +72,12 @@ private:
     float                    totalProgress_   = 0.0f;
     std::string              currentStatus_;
     std::string              errorMessage_;
+    std::string              interruptButtonLabel_;
+    std::string              interruptConfirmTitle_;
+    std::string              interruptConfirmBody_;
+    std::atomic<bool>        abortRequested_ {false};
+    bool                     abortedByUser_ = false;
+    ModalConfirm             interruptConfirm_;
     util::ByteRateMeter      speedMeter_;
     std::shared_ptr<InstallDataSourceCallbacks> sourceCallbacks_;
     mutable std::mutex       mutex_;

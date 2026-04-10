@@ -1,4 +1,5 @@
 #pragma once
+#include "ui/modals.hpp"
 #include "ui/touch_event.hpp"
 #include "util/websocket_installer_server.hpp"
 #include <cstdint>
@@ -27,6 +28,10 @@ private:
     int targetFocusCol_ = 1;
     int buttonFocusCol_ = 1; // 0 cancel, 1 start
     bool open_ = false;
+    std::string interruptButtonLabel_;
+    std::string interruptConfirmTitle_;
+    std::string interruptConfirmBody_;
+    ModalConfirm interruptConfirm_;
     WebSocketInstallerServer server_;
 };
 

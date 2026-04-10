@@ -257,8 +257,6 @@ void BottomMainMenu::render(Renderer& renderer, FontManager& fm, const I18n& i18
 
     // --- Title row ---
     ui::drawPanelTitleBar(renderer, fm, mx, y, mw, i18n.t("menu.title"), true, false);
-    fm.drawText(renderer.sdl(), i18n.t("menu.hints"), tx + PADDING_SM,
-                ty + MENU_SHEET_TITLE_H - FONT_SIZE_SMALL - 8, FONT_SIZE_SMALL, TEXT_SECONDARY);
     ty += MENU_SHEET_TITLE_H;
 
     // --- Context row (current folder) ---
@@ -310,7 +308,8 @@ void BottomMainMenu::render(Renderer& renderer, FontManager& fm, const I18n& i18
             if (!key || !key[0]) continue;
             SDL_Color colr = dis ? TEXT_DISABLED : (foc ? PRIMARY : MENU_ITEM_TEXT);
             fm.drawTextEllipsis(renderer.sdl(), i18n.t(key), cx + kCellTextPadX,
-                                cy + (MENU_SHEET_CELL_H - FONT_SIZE_SMALL) / 2, FONT_SIZE_SMALL,
+                                cy + (MENU_SHEET_CELL_H - FONT_SIZE_MAIN_MENU_ITEM) / 2,
+                                FONT_SIZE_MAIN_MENU_ITEM,
                                 colr, cellW - kCellTextPadX * 2);
         }
     }

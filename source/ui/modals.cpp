@@ -81,7 +81,7 @@ ConfirmResult ModalConfirm::handleInput(uint64_t kDown, const TouchTap* tap) {
     return ConfirmResult::None;
 }
 
-void ModalConfirm::render(Renderer& renderer, FontManager& fm, const I18n& i18n) {
+void ModalConfirm::render(Renderer& renderer, FontManager& fm, const I18n& i18n) const {
     if (!active) return;
     using namespace theme;
 

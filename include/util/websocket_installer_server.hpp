@@ -40,6 +40,8 @@ public:
     bool hasSpeedSample() const;
     uint64_t transferredBytes() const;
     bool speedFinished() const;
+    void requestAbortInstall();
+    bool abortRequested() const { return abortRequested_.load(); }
 
 private:
     struct RemoteFileEntry {
@@ -89,6 +91,7 @@ private:
     std::atomic<bool> running_ {false};
     std::atomic<bool> stopRequested_ {false};
     std::atomic<bool> installing_ {false};
+    std::atomic<bool> abortRequested_ {false};
     int listenFd_ = -1;
     int clientFd_ = -1;
     uint16_t port_ = 0;

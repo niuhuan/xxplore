@@ -24,7 +24,7 @@ public:
 
     bool isOpen() const { return active; }
     ConfirmResult handleInput(uint64_t kDown, const TouchTap* tap = nullptr);
-    void render(Renderer& renderer, FontManager& fm, const I18n& i18n);
+    void render(Renderer& renderer, FontManager& fm, const I18n& i18n) const;
 
 private:
     bool        active = false;

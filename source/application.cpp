@@ -845,7 +845,7 @@ int Application::run(int argc, char* argv[]) {
                        void* outBuffer, std::string& errOut) {
                 return provMgr.readFile(item.path, offset, size, outBuffer, errOut);
             };
-        installerScreen.open(std::move(items), InstallDeleteMode::KeepFiles, appletMode,
+        installerScreen.open(std::move(items), InstallDeleteMode::KeepFiles, appletMode, i18n,
                              sourceCallbacks);
         activeRef().list.clearSelection();
         pendingInstallItems.clear();
@@ -1485,7 +1485,7 @@ int Application::run(int argc, char* argv[]) {
                         result == InstallPromptResult::InstallAndDelete
                             ? InstallDeleteMode::DeleteAfterInstall
                             : InstallDeleteMode::KeepFiles,
-                        appletMode, sourceCallbacks);
+                        appletMode, i18n, sourceCallbacks);
                     activeList.clearSelection();
                 } else {
                     pendingInstallItems.clear();

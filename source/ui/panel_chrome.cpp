@@ -27,6 +27,22 @@ void drawPanelCloseButton(Renderer& renderer, int cardX, int cardY, int cardW, b
     drawCloseGlyph(renderer, btnX, btnY, kPanelCloseButtonSize, glyph);
 }
 
+void drawPanelTextButton(Renderer& renderer, FontManager& fm, int cardX, int cardY, int cardW,
+                         int buttonW, const char* label, bool focused) {
+    const int btnX = cardX + cardW - 14 - buttonW;
+    const int btnY = cardY + (kPanelTitleBarH - kPanelCloseButtonSize) / 2;
+    SDL_Color bg = focused ? theme::PRIMARY_DIM : theme::SURFACE;
+    SDL_Color border = focused ? theme::PRIMARY : theme::DIVIDER;
+    SDL_Color text = focused ? theme::ON_PRIMARY : theme::TEXT;
+    renderer.drawRoundedRectFilled(btnX, btnY, buttonW, kPanelCloseButtonSize, 10, bg);
+    renderer.drawRoundedRect(btnX, btnY, buttonW, kPanelCloseButtonSize, 10, border);
+    int textW = fm.measureText(label, theme::FONT_SIZE_SMALL);
+    int textH = fm.fontHeight(theme::FONT_SIZE_SMALL);
+    int textX = btnX + (buttonW - textW) / 2;
+    int textY = btnY + (kPanelCloseButtonSize - textH) / 2;
+    fm.drawText(renderer.sdl(), label, textX, textY, theme::FONT_SIZE_SMALL, text);
+}
+
 void drawPanelTitleBar(Renderer& renderer, FontManager& fm, int x, int y, int w,
                        const char* title, bool showCloseButton, bool closeFocused) {
     renderer.drawRoundedRectFilled(x, y, w, kPanelTitleBarH, 12, theme::HEADER_BG);
@@ -46,6 +62,13 @@ bool panelCloseButtonHit(int cardX, int cardY, int cardW, int tapX, int tapY) {
     const int btnX = cardX + cardW - 14 - kPanelCloseButtonSize;
     const int btnY = cardY + (kPanelTitleBarH - kPanelCloseButtonSize) / 2;
     return tapX >= btnX && tapX < btnX + kPanelCloseButtonSize &&
+           tapY >= btnY && tapY < btnY + kPanelCloseButtonSize;
+}
+
+bool panelTextButtonHit(int cardX, int cardY, int cardW, int buttonW, int tapX, int tapY) {
+    const int btnX = cardX + cardW - 14 - buttonW;
+    const int btnY = cardY + (kPanelTitleBarH - kPanelCloseButtonSize) / 2;
+    return tapX >= btnX && tapX < btnX + buttonW &&
            tapY >= btnY && tapY < btnY + kPanelCloseButtonSize;
 }
 

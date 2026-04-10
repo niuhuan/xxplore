@@ -448,6 +448,7 @@ void WebSocketInstallerServer::workerMain() {
 }
 
 void WebSocketInstallerServer::installWorkerMain(std::vector<RemoteFileEntry> items) {
+    abortRequested_ = false;
     std::vector<InstallQueueItem> queue;
     queue.reserve(items.size());
     for (const auto& item : items) {
@@ -482,6 +483,9 @@ void WebSocketInstallerServer::installWorkerMain(std::vector<RemoteFileEntry> it
             std::lock_guard<std::mutex> lock(mutex_);
             speedMeter_.update(totalBytesDone, static_cast<uint64_t>(std::time(nullptr)));
         };
+    callbacks.shouldAbort = [this]() {
+        return abortRequested_.load();
+    };
 
     {
         std::lock_guard<std::mutex> lock(mutex_);
@@ -514,11 +518,19 @@ void WebSocketInstallerServer::installWorkerMain(std::vector<RemoteFileEntry> it
         }
         sendInstallResult(true, "Install completed.");
     } else {
+        const bool abortedByUser = abortRequested_.load();
         if (!err.empty())
             appendLog("Web install failed: " + err);
-        setStatus(text("status_install_failed"));
-        sendInstallResult(false, err.empty() ? "Install failed." : err);
+        if (abortedByUser) {
+            setStatus(text("status_install_cancelled"));
+            sendJsonEvent("status", text("status_install_cancelled"));
+            sendInstallResult(false, text("error_user_abort"));
+        } else {
+            setStatus(text("status_install_failed"));
+            sendInstallResult(false, err.empty() ? "Install failed." : err);
+        }
     }
+    abortRequested_ = false;
 
     {
         std::lock_guard<std::mutex> lock(sessionMutex_);
@@ -529,6 +541,13 @@ void WebSocketInstallerServer::installWorkerMain(std::vector<RemoteFileEntry> it
         sessionAbortReason_.clear();
     }
     closeClientSocket();
+}
+
+void WebSocketInstallerServer::requestAbortInstall() {
+    if (!installing_)
+        return;
+    abortRequested_ = true;
+    abortPendingRead(text("error_user_abort"));
 }
 
 void WebSocketInstallerServer::appendLog(const std::string& line) {

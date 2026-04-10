@@ -16,6 +16,8 @@ namespace xxplore {
 
 namespace {
 
+constexpr int kTitleActionButtonW = 132;
+
 void drawProgressBar(Renderer& renderer, int x, int y, int w, int h, float progress) {
     if (progress < 0.0f)
         progress = 0.0f;
@@ -105,7 +107,9 @@ void WebSocketInstallerScreen::open(const I18n& i18n) {
         {"status_install_completed", i18n.t("websocket_installer.status_install_completed")},
         {"status_install_failed", i18n.t("websocket_installer.status_install_failed")},
         {"status_install_aborted", i18n.t("websocket_installer.status_install_aborted")},
+        {"status_install_cancelled", i18n.t("websocket_installer.status_install_cancelled")},
         {"error_conflict_abort", i18n.t("websocket_installer.error_conflict_abort")},
+        {"error_user_abort", i18n.t("websocket_installer.error_user_abort")},
         {"error_browser_disconnected", i18n.t("websocket_installer.error_browser_disconnected")},
         {"error_session_closed", i18n.t("websocket_installer.error_session_closed")},
         {"error_browser_not_connected", i18n.t("websocket_installer.error_browser_not_connected")},
@@ -117,6 +121,10 @@ void WebSocketInstallerScreen::open(const I18n& i18n) {
     focusRow_ = 1;
     targetFocusCol_ = 1;
     buttonFocusCol_ = 1;
+    interruptButtonLabel_ = std::string(i18n.t("installer.abort_button")) + "(-)";
+    interruptConfirmTitle_ = i18n.t("installer.abort_confirm_title");
+    interruptConfirmBody_ = i18n.t("installer.abort_confirm_body");
+    interruptConfirm_.close();
 }
 
 void WebSocketInstallerScreen::close() {
@@ -125,12 +133,30 @@ void WebSocketInstallerScreen::close() {
     server_.stop();
     util::releaseScreenAwake();
     open_ = false;
+    interruptButtonLabel_.clear();
+    interruptConfirmTitle_.clear();
+    interruptConfirmBody_.clear();
+    interruptConfirm_.close();
 }
 
 WebSocketInstallerAction WebSocketInstallerScreen::handleInput(uint64_t kDown,
                                                                const TouchTap* tap) {
     if (!open_)
         return WebSocketInstallerAction::None;
+
+    if (interruptConfirm_.isOpen() && !server_.isInstalling())
+        interruptConfirm_.close();
+
+    if (interruptConfirm_.isOpen()) {
+        ConfirmResult result = interruptConfirm_.handleInput(kDown, tap);
+        if (result == ConfirmResult::Confirmed) {
+            server_.requestAbortInstall();
+            interruptConfirm_.close();
+        } else if (result == ConfirmResult::Cancelled) {
+            interruptConfirm_.close();
+        }
+        return WebSocketInstallerAction::None;
+    }
 
     if (!server_.isRunning()) {
         const int cardX = 40;
@@ -202,8 +228,20 @@ WebSocketInstallerAction WebSocketInstallerScreen::handleInput(uint64_t kDown,
         return WebSocketInstallerAction::None;
     }
 
-    if (server_.isInstalling())
+    if (server_.isInstalling()) {
+        const int cardX = 40;
+        const int cardY = 40;
+        if (kDown & HidNpadButton_Minus) {
+            interruptConfirm_.open(interruptConfirmTitle_, interruptConfirmBody_);
+            return WebSocketInstallerAction::None;
+        }
+        if (tap && tap->active &&
+            ui::panelTextButtonHit(cardX, cardY, theme::SCREEN_W - 80, kTitleActionButtonW,
+                                   tap->x, tap->y)) {
+            interruptConfirm_.open(interruptConfirmTitle_, interruptConfirmBody_);
+        }
         return WebSocketInstallerAction::None;
+    }
 
     const int cardX = 40;
     const int cardY = 40;
@@ -238,6 +276,9 @@ void WebSocketInstallerScreen::render(Renderer& renderer, FontManager& fm, const
                 theme::PRIMARY);
     if (server_.isRunning() && !server_.isInstalling())
         ui::drawPanelCloseButton(renderer, cardX, cardY, cardW, false);
+    else if (server_.isInstalling())
+        ui::drawPanelTextButton(renderer, fm, cardX, cardY, cardW, kTitleActionButtonW,
+                                interruptButtonLabel_.c_str(), false);
     y += 34;
 
     if (!server_.isRunning()) {
@@ -400,6 +441,8 @@ void WebSocketInstallerScreen::render(Renderer& renderer, FontManager& fm, const
                         cardY + cardH - 32, theme::FONT_SIZE_SMALL, theme::TEXT_SECONDARY);
         }
     }
+
+    interruptConfirm_.render(renderer, fm, i18n);
 }
 
 } // namespace xxplore
