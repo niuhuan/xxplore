@@ -11,6 +11,7 @@
 #include "swkbd_input.hpp"
 #include "ui/file_list.hpp"
 #include "ui/font_manager.hpp"
+#include "ui/ftp_server_screen.hpp"
 #include "ui/image_viewer.hpp"
 #include "ui/installer_screen.hpp"
 #include "ui/loading_overlay.hpp"
@@ -27,12 +28,18 @@
 #include "util/screen_awake.hpp"
 
 #include <algorithm>
+#include <csignal>
+#include <cstdlib>
+#include <cstring>
+#include <exception>
+#include <fcntl.h>
 #include <cstdio>
 #include <cstring>
 #include <memory>
 #include <mutex>
 #include <string>
 #include <thread>
+#include <unistd.h>
 #include <utility>
 #include <vector>
 #include <switch.h>
@@ -41,8 +48,45 @@ namespace xxplore {
 
 namespace {
 
+#ifdef XXPLORE_DEBUG
+constexpr const char* kCrashLogPath = "sdmc:/switch/xxplore_crash.log";
+
+void appendCrashLogLine(const char* line) {
+    int fd = ::open(kCrashLogPath, O_WRONLY | O_CREAT | O_APPEND, 0644);
+    if (fd < 0)
+        return;
+    ::write(fd, line, std::strlen(line));
+    ::write(fd, "\n", 1);
+    ::close(fd);
+}
+
+void onTerminate() {
+    appendCrashLogLine("std::terminate");
+    std::_Exit(1);
+}
+
+void onSignalCrash(int sig) {
+    char buffer[64];
+    std::snprintf(buffer, sizeof(buffer), "signal %d", sig);
+    appendCrashLogLine(buffer);
+    std::_Exit(128 + sig);
+}
+
+void installCrashHandlers() {
+    int fd = ::open(kCrashLogPath, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    if (fd >= 0)
+        ::close(fd);
+    std::set_terminate(onTerminate);
+    std::signal(SIGABRT, onSignalCrash);
+    std::signal(SIGSEGV, onSignalCrash);
+    std::signal(SIGBUS, onSignalCrash);
+    std::signal(SIGILL, onSignalCrash);
+    std::signal(SIGFPE, onSignalCrash);
+}
+#endif
+
 enum { ACTION_NONE = 0, ACTION_ENTER, ACTION_GO_UP, ACTION_WEBSOCKET_INSTALLER,
-       ACTION_ADD_NETWORK_DRIVE };
+       ACTION_FTP_SERVER, ACTION_ADD_NETWORK_DRIVE };
 enum ActivePanel { PANEL_LEFT, PANEL_RIGHT };
 
 enum class InputLayer {
@@ -57,6 +101,7 @@ enum class InputLayer {
     InstallerScreen,
     SettingsScreen,
     WebSocketInstallerScreen,
+    FtpServerScreen,
     NetworkDriveForm,
     LoadingOverlay,
 };
@@ -348,6 +393,8 @@ static bool buildItemsForPath(const std::string& path, const std::vector<IconEnt
         }
         items.push_back({i18n.t("root.websocket_installer"), findIcon(icons, "download"),
                          ACTION_WEBSOCKET_INSTALLER, 0});
+        items.push_back({i18n.t("root.ftp_server"), findIcon(icons, "network"),
+                         ACTION_FTP_SERVER, 0});
         items.push_back({i18n.t("root.add_network_drive"), findIcon(icons, "add"),
                          ACTION_ADD_NETWORK_DRIVE, 0});
         itemsOut = std::move(items);
@@ -478,7 +525,13 @@ enum class PendingConfirm { None, DeleteItems, PasteChoice, DeleteDrive, Unmount
 int Application::run(int argc, char* argv[]) {
     (void)argc;
 #ifdef XXPLORE_DEBUG
+    installCrashHandlers();
+#endif
     socketInitializeDefault();
+#ifdef SIGPIPE
+    std::signal(SIGPIPE, SIG_IGN);
+#endif
+#ifdef XXPLORE_DEBUG
     nxlinkStdio();
 #endif
 
@@ -570,6 +623,7 @@ int Application::run(int argc, char* argv[]) {
     InstallerScreen installerScreen;
     SettingsScreen settingsScreen;
     WebSocketInstallerScreen webSocketInstallerScreen;
+    FtpServerScreen ftpServerScreen;
     NetworkDriveForm networkDriveForm;
     LoadingOverlay loadingOverlay;
 
@@ -1184,6 +1238,8 @@ int Application::run(int argc, char* argv[]) {
             inputLayer = InputLayer::LoadingOverlay;
         else if (networkDriveForm.isOpen())
             inputLayer = InputLayer::NetworkDriveForm;
+        else if (ftpServerScreen.isOpen())
+            inputLayer = InputLayer::FtpServerScreen;
         else if (webSocketInstallerScreen.isOpen())
             inputLayer = InputLayer::WebSocketInstallerScreen;
         else if (settingsScreen.isOpen())
@@ -1242,6 +1298,13 @@ int Application::run(int argc, char* argv[]) {
                     }
                 }
             }
+            break;
+        }
+
+        case InputLayer::FtpServerScreen: {
+            FtpServerScreenAction action = ftpServerScreen.handleInput(kDown, &tap);
+            if (action == FtpServerScreenAction::Close)
+                ftpServerScreen.close();
             break;
         }
 
@@ -1667,6 +1730,9 @@ int Application::run(int argc, char* argv[]) {
                     } else if (item->action == ACTION_WEBSOCKET_INSTALLER) {
                         activeList.clearSelection();
                         webSocketInstallerScreen.open(i18n);
+                    } else if (item->action == ACTION_FTP_SERVER) {
+                        activeList.clearSelection();
+                        ftpServerScreen.open();
                     } else if (item->action == ACTION_ADD_NETWORK_DRIVE) {
                         activeList.clearSelection();
                         networkDriveForm.openNew();
@@ -2050,15 +2116,17 @@ int Application::run(int argc, char* argv[]) {
         const bool anyOverlay =
             mainMenu.isOpen() || modalConfirm.isOpen() || modalChoice.isOpen()
             || modalProgress.isOpen() || modalInfo.isOpen() || modalInstallPrompt.isOpen()
-            || networkDriveForm.isOpen() || loadingOverlay.isVisible();
+            || networkDriveForm.isOpen() || ftpServerScreen.isOpen() || loadingOverlay.isVisible();
         if (anyOverlay && !imageViewer.isOpen() && !installerScreen.isOpen()
             && !settingsScreen.isOpen()
+            && !ftpServerScreen.isOpen()
             && !webSocketInstallerScreen.isOpen()) {
             int scrimH = theme::HEADER_H + theme::PANEL_CONTENT_H;
             renderer.drawRectFilled(0, 0, theme::SCREEN_W, scrimH, theme::MENU_SCRIM_CONTENT);
         }
         if (!imageViewer.isOpen() && !installerScreen.isOpen()
             && !settingsScreen.isOpen()
+            && !ftpServerScreen.isOpen()
             && !webSocketInstallerScreen.isOpen()
             && !networkDriveForm.isOpen())
             renderFooter(renderer, fontManager, i18n, appConfig.touchButtonsEnabled);
@@ -2072,6 +2140,7 @@ int Application::run(int argc, char* argv[]) {
         imageViewer.render(renderer);
         installerScreen.render(renderer, fontManager, i18n);
         settingsScreen.render(renderer, fontManager, i18n);
+        ftpServerScreen.render(renderer, fontManager, i18n);
         webSocketInstallerScreen.render(renderer, fontManager, i18n);
         networkDriveForm.render(renderer, fontManager, i18n);
         loadingOverlay.render(renderer, fontManager, i18n);
@@ -2084,6 +2153,7 @@ int Application::run(int argc, char* argv[]) {
 
     leftPanel.list.destroyCache();
     rightPanel.list.destroyCache();
+    ftpServerScreen.close();
     webSocketInstallerScreen.close();
     usbDriveManager.shutdown();
     // Destroy network providers before socket services are torn down.
@@ -2093,9 +2163,7 @@ int Application::run(int argc, char* argv[]) {
     fontManager.shutdown();
     renderer.shutdown();
     romfsExit();
-#ifdef XXPLORE_DEBUG
     socketExit();
-#endif
     return 0;
 }
 
