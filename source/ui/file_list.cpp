@@ -1,4 +1,5 @@
 #include "ui/file_list.hpp"
+#include "fs/fs_api.hpp"
 #include "ui/renderer.hpp"
 #include "ui/font_manager.hpp"
 #include "ui/theme.hpp"
@@ -179,6 +180,8 @@ void FileList::updateCache(Renderer& renderer, FontManager& fontManager,
 
     int iconX = theme::PADDING;
     int textX = iconX + theme::ICON_SIZE + theme::PADDING_SM;
+    const int sizeRightX = width - theme::PADDING;
+    const int sizeFont = theme::FONT_SIZE_SMALL;
 
     for (int i = 0; i < (int)items.size(); i++) {
         int iy = i * theme::ITEM_H - scrollTop;
@@ -207,12 +210,29 @@ void FileList::updateCache(Renderer& renderer, FontManager& fontManager,
                                  theme::ICON_SIZE, theme::ICON_SIZE);
         }
 
+        std::string sizeText = "--";
+        if (!items[i].label.empty() && items[i].label != "..") {
+            if (items[i].isDirectory || !items[i].hasSize)
+                sizeText = "--";
+            else
+                sizeText = fs::formatSize(items[i].size);
+        }
+        int sizeW = fontManager.measureText(sizeText.c_str(), sizeFont);
+        int sizeX = sizeRightX - sizeW;
+        int sizeH = fontManager.fontHeight(sizeFont);
+        int sizeY = iy + (theme::ITEM_H - sizeH) / 2;
+        fontManager.drawText(renderer.sdl(), sizeText.c_str(), sizeX, sizeY,
+                             sizeFont, theme::TEXT_SECONDARY);
+
         // Label
         int textH = fontManager.fontHeight(theme::FONT_SIZE_ITEM);
-        fontManager.drawText(renderer.sdl(), items[i].label.c_str(),
+        int labelMaxW = sizeX - textX - theme::PADDING;
+        if (labelMaxW < 40)
+            labelMaxW = 40;
+        fontManager.drawTextEllipsis(renderer.sdl(), items[i].label.c_str(),
             textX,
             iy + (theme::ITEM_H - textH) / 2,
-            theme::FONT_SIZE_ITEM, theme::TEXT);
+            theme::FONT_SIZE_ITEM, theme::TEXT, labelMaxW);
 
         // Divider
         renderer.drawRectFilled(

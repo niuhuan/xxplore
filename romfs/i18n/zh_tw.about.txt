@@ -1,8 +1,6 @@
 Xxplore
 
-作者: niuhuan
+Nintendo Switch 上專業的檔案管理程式
 
-一款專業的檔案管理程式。
-您可以自由瀏覽與管理
-SD卡 / WebDav / Samba / USB裝置 / FTP伺服器 中的檔案，
-也可以安裝 NSP / XCI / NSZ / XCZ。
+作者: niuhuan
+程式碼託管: Github

@@ -1,8 +1,6 @@
 Xxplore
 
-Auteur : niuhuan
+Gestionnaire de fichiers professionnel sur Nintendo Switch
 
-Un gestionnaire de fichiers professionnel.
-Vous pouvez parcourir et gerer librement les fichiers sur
-carte SD / WebDav / Samba / peripheriques USB / serveurs FTP,
-et aussi installer NSP / XCI / NSZ / XCZ.
+Auteur : niuhuan
+Code source : Github

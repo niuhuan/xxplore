@@ -1,8 +1,6 @@
-Xxplore
+Xxplore 
+
+Nintendo Switch 上专业的文件管理程序
 
 作者: niuhuan
-
-一款专业的文件管理程序。
-您可以随意浏览和管理
-SD卡 / WebDav / Samba / USB设备 / FTP服务器 中的文件,
-也可以安装 NSP / XCI / NSZ / XCZ。
+代码托管: Github

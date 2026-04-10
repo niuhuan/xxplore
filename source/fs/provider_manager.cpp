@@ -644,6 +644,7 @@ std::vector<FileEntry> ProviderManager::getRootEntries() const {
         e.name = p->displayPrefix();
         e.isDirectory = true;
         e.size = 0;
+        e.hasSize = false;
         entries.push_back(std::move(e));
     }
     return entries;

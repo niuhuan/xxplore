@@ -89,6 +89,71 @@ static bool isDirEntry(const std::string& path) {
     return S_ISDIR(st.st_mode);
 }
 
+static bool isValidUtf8(const std::string& s) {
+    const auto* data = reinterpret_cast<const unsigned char*>(s.data());
+    std::size_t i = 0;
+    while (i < s.size()) {
+        unsigned char c = data[i];
+        if (c <= 0x7F) {
+            if (c < 0x20 || c == 0x7F)
+                return false;
+            ++i;
+            continue;
+        }
+
+        if ((c & 0xE0) == 0xC0) {
+            if (i + 1 >= s.size())
+                return false;
+            unsigned char c1 = data[i + 1];
+            if ((c1 & 0xC0) != 0x80)
+                return false;
+            uint32_t codepoint = (static_cast<uint32_t>(c & 0x1F) << 6) |
+                                 static_cast<uint32_t>(c1 & 0x3F);
+            if (codepoint < 0x80)
+                return false;
+            i += 2;
+            continue;
+        }
+
+        if ((c & 0xF0) == 0xE0) {
+            if (i + 2 >= s.size())
+                return false;
+            unsigned char c1 = data[i + 1];
+            unsigned char c2 = data[i + 2];
+            if ((c1 & 0xC0) != 0x80 || (c2 & 0xC0) != 0x80)
+                return false;
+            uint32_t codepoint = (static_cast<uint32_t>(c & 0x0F) << 12) |
+                                 (static_cast<uint32_t>(c1 & 0x3F) << 6) |
+                                 static_cast<uint32_t>(c2 & 0x3F);
+            if (codepoint < 0x800 || (codepoint >= 0xD800 && codepoint <= 0xDFFF))
+                return false;
+            i += 3;
+            continue;
+        }
+
+        if ((c & 0xF8) == 0xF0) {
+            if (i + 3 >= s.size())
+                return false;
+            unsigned char c1 = data[i + 1];
+            unsigned char c2 = data[i + 2];
+            unsigned char c3 = data[i + 3];
+            if ((c1 & 0xC0) != 0x80 || (c2 & 0xC0) != 0x80 || (c3 & 0xC0) != 0x80)
+                return false;
+            uint32_t codepoint = (static_cast<uint32_t>(c & 0x07) << 18) |
+                                 (static_cast<uint32_t>(c1 & 0x3F) << 12) |
+                                 (static_cast<uint32_t>(c2 & 0x3F) << 6) |
+                                 static_cast<uint32_t>(c3 & 0x3F);
+            if (codepoint < 0x10000 || codepoint > 0x10FFFF)
+                return false;
+            i += 4;
+            continue;
+        }
+
+        return false;
+    }
+    return true;
+}
+
 // ---- public path utilities (unchanged) ----
 
 bool pathExists(const std::string& path) {
@@ -99,6 +164,20 @@ bool pathExists(const std::string& path) {
 bool isDirectoryPath(const std::string& path) {
     std::error_code ec;
     return stdfs::is_directory(stdfs::path(path), ec);
+}
+
+bool isValidDisplayName(const std::string& s) {
+    if (s.empty() || s == "." || s == "..")
+        return false;
+
+    for (unsigned char ch : s) {
+        if (ch == 0 || ch == '/' || ch == '\\')
+            return false;
+        if (ch < 0x20 || ch == 0x7F)
+            return false;
+    }
+
+    return isValidUtf8(s);
 }
 
 bool isValidEnglishFileName(const std::string& s) {

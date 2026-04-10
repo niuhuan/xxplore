@@ -1,8 +1,6 @@
 Xxplore
 
-作者: niuhuan
+Nintendo Switch向けのプロ向けファイルマネージャー
 
-プロ向けのファイル管理アプリです。
-SDカード / WebDav / Samba / USB機器 / FTPサーバー内のファイルを
-自由に閲覧・管理でき、
-NSP / XCI / NSZ / XCZ のインストールにも対応します。
+作者: niuhuan
+コード公開: Github

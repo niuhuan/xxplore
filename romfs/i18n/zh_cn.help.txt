@@ -1,12 +1,14 @@
-驱动器命名规则:
-sdmc: 表示 SD 卡
-ums*: 表示 USB 存储设备
-名称(WebDAV): 表示 WebDAV 驱动器
-名称(SMB): 表示 Samba/SMB 驱动器
+如果在相册 Applet 模式下运行,
+部分能力会受到内存限制。
+部分NSZ/XCZ没有足够的内存解压缩。
 
 在应用程序模式下运行 Xxplore,
 可以查看更大尺寸的图片,
 也可以使用更大的安装缓存。
 
-如果在相册 Applet 模式下运行,
-以上能力会受到内存限制。
+驱动器命名规则:
+sdmc: 表示 SD 卡
+ums*: 表示 USB 存储设备
+名称(WebDAV): 表示 WebDAV 驱动器
+名称(SMB): 表示 Samba/SMB 驱动器
+名称(FTP): 表示 FTP 驱动器

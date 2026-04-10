@@ -1,8 +1,11 @@
 #include "fs/webdav_provider.hpp"
 #include <algorithm>
+#include <cerrno>
+#include <cctype>
 #include <condition_variable>
 #include <cstdarg>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <curl/curl.h>
 #include <deque>
@@ -27,6 +30,30 @@ void debugLog(const char* fmt, ...) {
 #else
     (void)fmt;
 #endif
+}
+
+std::string trimAscii(const std::string& value) {
+    std::size_t start = 0;
+    while (start < value.size() && std::isspace(static_cast<unsigned char>(value[start])))
+        ++start;
+    std::size_t end = value.size();
+    while (end > start && std::isspace(static_cast<unsigned char>(value[end - 1])))
+        --end;
+    return value.substr(start, end - start);
+}
+
+bool parseStrictUint64(const std::string& raw, uint64_t& valueOut) {
+    std::string value = trimAscii(raw);
+    if (value.empty())
+        return false;
+
+    errno = 0;
+    char* end = nullptr;
+    unsigned long long parsed = std::strtoull(value.c_str(), &end, 10);
+    if (errno != 0 || !end || *end != '\0')
+        return false;
+    valueOut = static_cast<uint64_t>(parsed);
+    return true;
 }
 
 // Curl write callback: append to std::string
@@ -810,24 +837,32 @@ std::vector<FileEntry> WebDavProvider::parsePropfindResponse(const std::string& 
 
         // Get content length
         uint64_t fileSize = 0;
+        bool hasSize = false;
         std::string sizeStr = extractXmlElementText(xml, blockStart, blockEnd, "getcontentlength");
-        if (!sizeStr.empty())
-            fileSize = std::strtoull(sizeStr.c_str(), nullptr, 10);
+        if (!sizeStr.empty()) {
+            if (parseStrictUint64(sizeStr, fileSize)) {
+                hasSize = !isDir;
+            } else {
+                debugLog("skip invalid size href=%s raw=%s", href.c_str(), sizeStr.c_str());
+            }
+        }
 
         bool isSelf = name.empty() || hrefPath == normalizedBase;
 
-        if (!isSelf && !name.empty()) {
+        if (!isSelf && isValidDisplayName(name)) {
             FileEntry e;
             e.name = name;
             e.isDirectory = isDir;
             e.size = fileSize;
+            e.hasSize = hasSize;
             debugLog("parsed entry href=%s path=%s name=%s dir=%d size=%llu", href.c_str(),
                      hrefPath.c_str(), name.c_str(), isDir ? 1 : 0,
                      static_cast<unsigned long long>(fileSize));
             entries.push_back(std::move(e));
         } else {
-            debugLog("skip entry href=%s path=%s self=%d name=%s", href.c_str(), hrefPath.c_str(),
-                     isSelf ? 1 : 0, name.c_str());
+            debugLog("skip entry href=%s path=%s self=%d valid_name=%d name=%s", href.c_str(),
+                     hrefPath.c_str(), isSelf ? 1 : 0, isValidDisplayName(name) ? 1 : 0,
+                     name.c_str());
         }
 
         pos = blockEnd;
@@ -861,6 +896,10 @@ bool WebDavProvider::testConnection(std::string& errOut) {
 
 std::vector<FileEntry> WebDavProvider::listDir(const std::string& path, std::string& errOut) {
     std::string url = makeUrl(path);
+    if (url.empty()) {
+        errOut = "invalid WebDAV URL";
+        return {};
+    }
     if (url.back() != '/') url += '/';
     debugLog("listDir rel=%s url=%s", path.c_str(), url.c_str());
 
@@ -897,6 +936,11 @@ std::vector<FileEntry> WebDavProvider::listDir(const std::string& path, std::str
 
 bool WebDavProvider::statPath(const std::string& path, FileStatInfo& out, std::string& errOut) {
     std::string url = makeUrl(path);
+    if (url.empty()) {
+        errOut = "invalid WebDAV URL";
+        out = {};
+        return false;
+    }
     debugLog("stat rel=%s url=%s", path.c_str(), url.c_str());
     auto res = performPropfind(url, 0);
     if (!res.error.empty()) {
@@ -933,7 +977,14 @@ bool WebDavProvider::statPath(const std::string& path, FileStatInfo& out, std::s
         auto p = res.body.find(open);
         if (p != std::string::npos) {
             p += std::strlen(open);
-            out.size = std::strtoull(res.body.c_str() + p, nullptr, 10);
+            std::size_t end = res.body.find('<', p);
+            std::string rawValue = res.body.substr(p, end == std::string::npos ? std::string::npos
+                                                                                : end - p);
+            uint64_t parsedSize = 0;
+            if (parseStrictUint64(rawValue, parsedSize))
+                out.size = parsedSize;
+            else
+                debugLog("invalid stat size rel=%s raw=%s", path.c_str(), rawValue.c_str());
             break;
         }
     }
@@ -943,6 +994,10 @@ bool WebDavProvider::statPath(const std::string& path, FileStatInfo& out, std::s
 
 bool WebDavProvider::createDirectory(const std::string& path, std::string& errOut) {
     std::string url = makeUrl(path);
+    if (url.empty()) {
+        errOut = "invalid WebDAV URL";
+        return false;
+    }
     if (url.back() != '/') url += '/';
 
     auto res = performRequest("MKCOL", url);

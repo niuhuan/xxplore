@@ -1,8 +1,6 @@
 Xxplore
 
-Author: niuhuan
+Professional file manager on Nintendo Switch
 
-A professional file manager.
-You can freely browse and manage files on
-SD card / WebDav / Samba / USB devices / FTP servers,
-and also install NSP / XCI / NSZ / XCZ.
+Author: niuhuan
+Source code: Github

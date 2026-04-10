@@ -1,12 +1,14 @@
+If you run in Album Applet mode,
+some features are limited by memory.
+Some NSZ/XCZ files do not have enough memory to decompress.
+
+When running Xxplore in application mode,
+you can view larger images,
+and you can also use a larger install cache.
+
 Drive naming rules:
 sdmc: means the SD card
 ums*: means a USB storage device
 Name(WebDAV): means a WebDAV drive
 Name(SMB): means a Samba/SMB drive
-
-When Xxplore runs in application mode,
-you can view larger images
-and use a larger install cache.
-
-If you run it in Album Applet mode,
-these capabilities are limited by memory.
+Name(FTP): means an FTP drive

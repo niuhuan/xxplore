@@ -177,7 +177,7 @@ bool pathAllowsSelection(const std::string& path) {
 }
 
 std::vector<FileEntry> getRootEntries() {
-    return {{"sdmc:", true, 0}};
+    return {{"sdmc:", true, 0, false}};
 }
 
 std::vector<FileEntry> listDir(const std::string& path) {
@@ -203,9 +203,11 @@ std::vector<FileEntry> listDir(const std::string& path) {
         if (stat(fullPath.c_str(), &st) == 0) {
             entry.isDirectory = S_ISDIR(st.st_mode);
             entry.size = static_cast<uint64_t>(st.st_size);
+            entry.hasSize = !entry.isDirectory;
         } else {
             entry.isDirectory = (ep->d_type == DT_DIR);
             entry.size = 0;
+            entry.hasSize = false;
         }
 
         if (entry.isDirectory)
@@ -333,23 +335,58 @@ bool isInstallPackagePath(const std::string& path) {
 }
 
 std::string formatSize(uint64_t bytes) {
-    static const char* kUnits[] = {"B", "KB", "MB", "GB", "TB"};
+    static const char* kUnits[] = {"B", "K", "M", "G", "T"};
+
+    auto addThousands = [](const std::string& digits) {
+        if (digits.empty())
+            return digits;
+        std::string out;
+        out.reserve(digits.size() + digits.size() / 3);
+        int count = 0;
+        for (auto it = digits.rbegin(); it != digits.rend(); ++it) {
+            if (count > 0 && count % 3 == 0)
+                out.push_back(',');
+            out.push_back(*it);
+            ++count;
+        }
+        std::reverse(out.begin(), out.end());
+        return out;
+    };
+
     double value = static_cast<double>(bytes);
-    size_t unit  = 0;
+    size_t unit = 0;
     while (value >= 1024.0 && unit < 4) {
         value /= 1024.0;
-        unit++;
+        ++unit;
     }
 
-    char buf[64];
-    if (unit == 0)
-        snprintf(buf, sizeof(buf), "%llu %s",
-                 static_cast<unsigned long long>(bytes), kUnits[unit]);
-    else if (value >= 10.0)
-        snprintf(buf, sizeof(buf), "%.0f %s", value, kUnits[unit]);
-    else
-        snprintf(buf, sizeof(buf), "%.1f %s", value, kUnits[unit]);
-    return buf;
+    if (unit == 0) {
+        return addThousands(std::to_string(static_cast<unsigned long long>(bytes))) + "   B";
+    }
+
+    char raw[64];
+    std::snprintf(raw, sizeof(raw), "%.1f", value);
+    std::string formatted(raw);
+    std::size_t dot = formatted.find('.');
+    if (dot == std::string::npos)
+        return addThousands(formatted) + " " + kUnits[unit];
+
+    std::string integerPart = formatted.substr(0, dot);
+    std::string decimalPart = formatted.substr(dot);
+    std::string withComma = addThousands(integerPart) + decimalPart;
+
+    if (withComma == "1024.0" && unit < 4) {
+        value /= 1024.0;
+        ++unit;
+        std::snprintf(raw, sizeof(raw), "%.1f", value);
+        formatted = raw;
+        dot = formatted.find('.');
+        integerPart = formatted.substr(0, dot);
+        decimalPart = formatted.substr(dot);
+        withComma = addThousands(integerPart) + decimalPart;
+    }
+
+    return withComma + " " + kUnits[unit];
 }
 
 bool probeImageInfo(const std::string& path, ImageInfo& out, std::string& errOut) {

@@ -175,6 +175,20 @@ std::string trim(const std::string& value) {
     return value.substr(start, end - start);
 }
 
+bool parseStrictUint64(const std::string& raw, uint64_t& valueOut) {
+    std::string value = trim(raw);
+    if (value.empty())
+        return false;
+
+    errno = 0;
+    char* end = nullptr;
+    unsigned long long parsed = std::strtoull(value.c_str(), &end, 10);
+    if (errno != 0 || !end || *end != '\0')
+        return false;
+    valueOut = static_cast<uint64_t>(parsed);
+    return true;
+}
+
 std::string normalizeAbsolutePath(const std::string& path) {
     std::vector<std::string> parts;
     std::string current;
@@ -409,8 +423,10 @@ bool parseMlsdLine(const std::string& line, FileEntry& entryOut) {
 
     std::string facts = line.substr(0, sep);
     std::string name = line.substr(sep + 1);
-    if (name.empty() || name == "." || name == "..")
+    if (!isValidDisplayName(name)) {
+        debugLog("skip invalid MLSD name=%s", name.c_str());
         return false;
+    }
 
     FileEntry entry;
     entry.name = name;
@@ -429,7 +445,13 @@ bool parseMlsdLine(const std::string& line, FileEntry& entryOut) {
             if (key == "type") {
                 entry.isDirectory = value == "dir" || value == "cdir" || value == "pdir";
             } else if (key == "size") {
-                entry.size = static_cast<uint64_t>(std::strtoull(value.c_str(), nullptr, 10));
+                uint64_t parsedSize = 0;
+                if (parseStrictUint64(value, parsedSize)) {
+                    entry.size = parsedSize;
+                    entry.hasSize = true;
+                } else {
+                    debugLog("invalid MLSD size name=%s raw=%s", name.c_str(), value.c_str());
+                }
             }
         }
         if (next == std::string::npos)
@@ -437,8 +459,6 @@ bool parseMlsdLine(const std::string& line, FileEntry& entryOut) {
         pos = next + 1;
     }
 
-    if (entry.name == "." || entry.name == "..")
-        return false;
     entryOut = std::move(entry);
     return true;
 }
@@ -466,28 +486,37 @@ bool parseListLine(const std::string& input, FileEntry& entryOut) {
                                  &month, &day, &year, timeField, kind, name);
         if (parsed == 6) {
             entry.name = name;
-            entry.isDirectory = std::strcmp(kind, "<DIR>") == 0;
-            if (!entry.isDirectory)
-                entry.size = static_cast<uint64_t>(std::strtoull(kind, nullptr, 10));
-            if (!entry.name.empty() && entry.name != "." && entry.name != "..") {
-                entryOut = std::move(entry);
-                return true;
+            if (!isValidDisplayName(entry.name)) {
+                debugLog("skip invalid LIST name=%s", entry.name.c_str());
+                return false;
             }
+            entry.isDirectory = std::strcmp(kind, "<DIR>") == 0;
+            if (!entry.isDirectory) {
+                uint64_t parsedSize = 0;
+                if (parseStrictUint64(kind, parsedSize)) {
+                    entry.size = parsedSize;
+                    entry.hasSize = true;
+                } else {
+                    debugLog("invalid LIST size name=%s raw=%s", entry.name.c_str(), kind);
+                }
+            }
+            entryOut = std::move(entry);
+            return true;
         }
     }
 
     char perms[32] = {0};
     char owner[128] = {0};
     char group[128] = {0};
+    char sizeField[64] = {0};
     char month[16] = {0};
     char yearOrTime[32] = {0};
     char name[512] = {0};
-    unsigned long long size = 0;
     int links = 0;
     int day = 0;
     int parsed =
-        std::sscanf(line.c_str(), "%31s %d %127s %127s %llu %15s %d %31s %511[^\r\n]",
-                    perms, &links, owner, group, &size, month, &day, yearOrTime, name);
+        std::sscanf(line.c_str(), "%31s %d %127s %127s %63s %15s %d %31s %511[^\r\n]",
+                    perms, &links, owner, group, sizeField, month, &day, yearOrTime, name);
     if (parsed < 9 || name[0] == '\0')
         return false;
 
@@ -495,10 +524,20 @@ bool parseListLine(const std::string& input, FileEntry& entryOut) {
     std::size_t arrow = entry.name.find(" -> ");
     if (arrow != std::string::npos)
         entry.name.erase(arrow);
-    entry.isDirectory = perms[0] == 'd';
-    entry.size = size;
-    if (entry.name.empty() || entry.name == "." || entry.name == "..")
+    if (!isValidDisplayName(entry.name)) {
+        debugLog("skip invalid LIST name=%s", entry.name.c_str());
         return false;
+    }
+    entry.isDirectory = perms[0] == 'd';
+    if (!entry.isDirectory) {
+        uint64_t parsedSize = 0;
+        if (parseStrictUint64(sizeField, parsedSize)) {
+            entry.size = parsedSize;
+            entry.hasSize = true;
+        } else {
+            debugLog("invalid LIST size name=%s raw=%s", entry.name.c_str(), sizeField);
+        }
+    }
 
     entryOut = std::move(entry);
     return true;

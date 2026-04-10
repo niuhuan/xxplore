@@ -16,7 +16,9 @@ struct ListItem {
     std::string  label;
     SDL_Texture* icon   = nullptr;  ///< Non-owning; texture lifetime managed elsewhere
     int          action = 0;
+    bool         isDirectory = false;
     uint64_t     size   = 0;
+    bool         hasSize = false;
     std::string  metadata;          ///< Hidden payload (e.g. network drive id)
 };
 

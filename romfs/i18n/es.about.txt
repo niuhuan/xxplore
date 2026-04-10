@@ -1,8 +1,6 @@
 Xxplore
 
-Autor: niuhuan
+Administrador de archivos profesional en Nintendo Switch
 
-Un administrador de archivos profesional.
-Puedes explorar y gestionar libremente archivos en
-tarjeta SD / WebDav / Samba / dispositivos USB / servidores FTP,
-y tambien instalar NSP / XCI / NSZ / XCZ.
+Autor: niuhuan
+Codigo fuente: Github

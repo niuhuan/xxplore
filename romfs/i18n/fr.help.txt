@@ -1,12 +1,14 @@
-Regles de nommage des lecteurs :
-sdmc: designe la carte SD
-ums*: designe un peripherique de stockage USB
-Nom(WebDAV): designe un lecteur WebDAV
-Nom(SMB): designe un lecteur Samba/SMB
+Si vous l'executez en mode Applet Album,
+certaines fonctions sont limitees par la memoire.
+Certains NSZ/XCZ n'ont pas assez de memoire pour la decompression.
 
 Quand Xxplore s'execute en mode application,
 vous pouvez afficher des images plus grandes
 et utiliser un cache d'installation plus grand.
 
-Si vous l'executez en mode Applet Album,
-ces fonctions sont limitees par la memoire.
+Regles de nommage des lecteurs :
+sdmc: designe la carte SD
+ums*: designe un peripherique de stockage USB
+Nom(WebDAV): designe un lecteur WebDAV
+Nom(SMB): designe un lecteur Samba/SMB
+Nom(FTP): designe un lecteur FTP

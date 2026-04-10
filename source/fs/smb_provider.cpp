@@ -246,13 +246,22 @@ std::vector<FileEntry> SmbProvider::listDir(const std::string& path, std::string
         std::vector<FileEntry> entries;
         struct smb2dirent* ent;
         while ((ent = smb2_readdir(smb2_, dir)) != nullptr) {
+            if (!ent->name) {
+                debugLog("skip entry with null name smb=%s", sp.empty() ? "<root>" : sp.c_str());
+                continue;
+            }
             if (std::strcmp(ent->name, ".") == 0 || std::strcmp(ent->name, "..") == 0)
                 continue;
+            if (!isValidDisplayName(ent->name)) {
+                debugLog("skip invalid SMB name=%s", ent->name);
+                continue;
+            }
 
             FileEntry e;
             e.name = ent->name;
             e.isDirectory = (ent->st.smb2_type == SMB2_TYPE_DIRECTORY);
             e.size = ent->st.smb2_size;
+            e.hasSize = !e.isDirectory;
             entries.push_back(std::move(e));
         }
 

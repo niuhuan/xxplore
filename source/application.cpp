@@ -386,7 +386,9 @@ static bool buildItemsForPath(const std::string& path, const std::vector<IconEnt
             li.label = r.name;
             li.icon = findIcon(icons, iconName);
             li.action = ACTION_ENTER;
+            li.isDirectory = true;
             li.size = r.size;
+            li.hasSize = r.hasSize;
             if (prov)
                 li.metadata = prov->providerId();
             items.push_back(std::move(li));
@@ -401,7 +403,7 @@ static bool buildItemsForPath(const std::string& path, const std::vector<IconEnt
         return true;
     }
 
-    items.push_back({"..", findIcon(icons, "back"), ACTION_GO_UP, 0});
+    items.push_back({"..", findIcon(icons, "back"), ACTION_GO_UP, true, 0, false});
     std::string errListDir;
     auto entries = provMgr.listDir(path, errListDir);
     if (!errListDir.empty()) {
@@ -411,7 +413,14 @@ static bool buildItemsForPath(const std::string& path, const std::vector<IconEnt
     }
     for (auto& e : entries) {
         int action = e.isDirectory ? ACTION_ENTER : ACTION_NONE;
-        items.push_back({e.name, findIcon(icons, fs::iconForEntry(e)), action, e.size});
+        ListItem item;
+        item.label = e.name;
+        item.icon = findIcon(icons, fs::iconForEntry(e));
+        item.action = action;
+        item.isDirectory = e.isDirectory;
+        item.size = e.size;
+        item.hasSize = e.hasSize;
+        items.push_back(std::move(item));
     }
     itemsOut = std::move(items);
     return true;

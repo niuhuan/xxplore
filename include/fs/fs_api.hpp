@@ -11,6 +11,7 @@ struct FileEntry {
     std::string name;
     bool        isDirectory = false;
     uint64_t    size        = 0;
+    bool        hasSize     = false;
 };
 
 struct FileStatInfo {
@@ -39,6 +40,7 @@ bool isImagePath(const std::string& path);
 bool isInstallPackagePath(const std::string& path);
 std::string formatSize(uint64_t bytes);
 bool probeImageInfo(const std::string& path, ImageInfo& out, std::string& errOut);
+bool isValidDisplayName(const std::string& name);
 
 bool pathExists(const std::string& path);
 bool isDirectoryPath(const std::string& path);
