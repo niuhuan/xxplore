@@ -85,6 +85,7 @@ const char* networkDriveTypeId(NetworkDriveType type) {
     switch (type) {
     case NetworkDriveType::WebDAV: return "webdav";
     case NetworkDriveType::SMB2:   return "smb2";
+    case NetworkDriveType::FTP:    return "ftp";
     }
     return "webdav";
 }
@@ -93,6 +94,7 @@ bool parseNetworkDriveTypeId(const char* id, NetworkDriveType& out) {
     if (!id) return false;
     if (std::strcmp(id, "webdav") == 0) { out = NetworkDriveType::WebDAV; return true; }
     if (std::strcmp(id, "smb2") == 0)   { out = NetworkDriveType::SMB2;   return true; }
+    if (std::strcmp(id, "ftp") == 0)    { out = NetworkDriveType::FTP;    return true; }
     return false;
 }
 

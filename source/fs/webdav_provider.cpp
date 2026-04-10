@@ -1,10 +1,14 @@
 #include "fs/webdav_provider.hpp"
 #include <algorithm>
+#include <condition_variable>
 #include <cstdarg>
 #include <cstdio>
 #include <cstring>
 #include <curl/curl.h>
+#include <deque>
+#include <mutex>
 #include <string>
+#include <thread>
 #include <vector>
 
 namespace xxplore {
@@ -66,6 +70,198 @@ struct StreamReadCtx {
     uint64_t offset = 0;
     uint64_t remaining = 0;
     std::string error;
+};
+
+class WebDavSequentialReader final : public SequentialFileReader {
+public:
+    WebDavSequentialReader(std::string url, std::string user, std::string pass, uint64_t offset)
+        : url_(std::move(url)), user_(std::move(user)), pass_(std::move(pass)), offset_(offset) {}
+
+    ~WebDavSequentialReader() override { close(); }
+
+    bool start(std::string& errOut) {
+        close();
+        stopRequested_ = false;
+        finished_ = false;
+        started_ = false;
+        httpCode_ = 0;
+        queueBytes_ = 0;
+        error_.clear();
+        worker_ = std::thread([this]() { workerMain(); });
+
+        std::unique_lock<std::mutex> lock(mutex_);
+        cvData_.wait(lock, [this]() {
+            return stopRequested_ || !error_.empty() || !queue_.empty() || finished_ || started_;
+        });
+        if (!error_.empty()) {
+            errOut = error_;
+            lock.unlock();
+            close();
+            return false;
+        }
+        return true;
+    }
+
+    bool read(void* outBuffer, size_t size, std::string& errOut) override {
+        if (size == 0)
+            return true;
+
+        auto* out = static_cast<unsigned char*>(outBuffer);
+        size_t filled = 0;
+
+        std::unique_lock<std::mutex> lock(mutex_);
+        while (filled < size) {
+            cvData_.wait(lock, [this]() {
+                return stopRequested_ || !error_.empty() || !queue_.empty() || finished_;
+            });
+
+            if (!error_.empty()) {
+                errOut = error_;
+                return false;
+            }
+
+            if (queue_.empty()) {
+                if (finished_) {
+                    errOut = "unexpected eof";
+                    return false;
+                }
+                continue;
+            }
+
+            Chunk& chunk = queue_.front();
+            size_t avail = chunk.data.size() - chunk.offset;
+            size_t take = std::min(avail, size - filled);
+            std::memcpy(out + filled, chunk.data.data() + chunk.offset, take);
+            chunk.offset += take;
+            filled += take;
+            queueBytes_ -= take;
+            if (chunk.offset >= chunk.data.size())
+                queue_.pop_front();
+            cvSpace_.notify_one();
+        }
+        return true;
+    }
+
+    void close() {
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            stopRequested_ = true;
+            cvData_.notify_all();
+            cvSpace_.notify_all();
+        }
+        if (worker_.joinable())
+            worker_.join();
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            queue_.clear();
+            queueBytes_ = 0;
+        }
+    }
+
+private:
+    struct Chunk {
+        std::vector<unsigned char> data;
+        size_t offset = 0;
+    };
+
+    static size_t curlWriteStreamingCb(void* ptr, size_t size, size_t nmemb, void* userdata) {
+        auto* self = static_cast<WebDavSequentialReader*>(userdata);
+        return self ? self->onWrite(static_cast<unsigned char*>(ptr), size * nmemb) : 0;
+    }
+
+    size_t onWrite(const unsigned char* data, size_t size) {
+        if (size == 0)
+            return 0;
+
+        std::unique_lock<std::mutex> lock(mutex_);
+        started_ = true;
+        cvData_.notify_all();
+
+        while (!stopRequested_ && queueBytes_ >= kMaxQueueBytes)
+            cvSpace_.wait(lock);
+        if (stopRequested_)
+            return 0;
+
+        Chunk chunk;
+        chunk.data.assign(data, data + size);
+        queueBytes_ += size;
+        queue_.push_back(std::move(chunk));
+        cvData_.notify_one();
+        return size;
+    }
+
+    void workerMain() {
+        CURL* curl = curl_easy_init();
+        if (!curl) {
+            std::lock_guard<std::mutex> lock(mutex_);
+            error_ = "curl_easy_init failed";
+            finished_ = true;
+            cvData_.notify_all();
+            return;
+        }
+
+        std::string range;
+        if (offset_ > 0) {
+            char buf[64];
+            std::snprintf(buf, sizeof(buf), "%llu-",
+                          static_cast<unsigned long long>(offset_));
+            range = buf;
+        }
+
+        curl_easy_setopt(curl, CURLOPT_URL, url_.c_str());
+        curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, curlWriteStreamingCb);
+        curl_easy_setopt(curl, CURLOPT_WRITEDATA, this);
+        curl_easy_setopt(curl, CURLOPT_TIMEOUT, 0L);
+        curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 10L);
+        curl_easy_setopt(curl, CURLOPT_BUFFERSIZE, 128L * 1024L);
+        if (!range.empty())
+            curl_easy_setopt(curl, CURLOPT_RANGE, range.c_str());
+
+        if (!user_.empty()) {
+            curl_easy_setopt(curl, CURLOPT_USERNAME, user_.c_str());
+            curl_easy_setopt(curl, CURLOPT_PASSWORD, pass_.c_str());
+            curl_easy_setopt(curl, CURLOPT_HTTPAUTH, CURLAUTH_BASIC | CURLAUTH_DIGEST);
+        }
+
+        CURLcode rc = curl_easy_perform(curl);
+        long httpCode = 0;
+        curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &httpCode);
+        curl_easy_cleanup(curl);
+
+        std::lock_guard<std::mutex> lock(mutex_);
+        httpCode_ = httpCode;
+        if (!stopRequested_) {
+            if (rc != CURLE_OK) {
+                error_ = curl_easy_strerror(rc);
+            } else if (httpCode_ != 200 && httpCode_ != 206) {
+                char buf[64];
+                std::snprintf(buf, sizeof(buf), "GET HTTP %ld", httpCode_);
+                error_ = buf;
+            }
+        }
+        finished_ = true;
+        cvData_.notify_all();
+        cvSpace_.notify_all();
+    }
+
+    static constexpr size_t kMaxQueueBytes = 1024 * 1024;
+
+    std::string url_;
+    std::string user_;
+    std::string pass_;
+    uint64_t offset_ = 0;
+
+    std::thread worker_;
+    std::mutex mutex_;
+    std::condition_variable cvData_;
+    std::condition_variable cvSpace_;
+    std::deque<Chunk> queue_;
+    size_t queueBytes_ = 0;
+    bool started_ = false;
+    bool stopRequested_ = false;
+    bool finished_ = false;
+    long httpCode_ = 0;
+    std::string error_;
 };
 
 size_t curlProviderReadCb(void* ptr, size_t size, size_t nmemb, void* userdata) {
@@ -855,6 +1051,15 @@ bool WebDavProvider::readFile(const std::string& path, uint64_t offset, size_t s
         std::memcpy(outBuffer, res.body.data(), size);
     }
     return true;
+}
+
+std::unique_ptr<SequentialFileReader>
+WebDavProvider::openSequentialRead(const std::string& path, uint64_t offset,
+                                   std::string& errOut) {
+    auto reader = std::make_unique<WebDavSequentialReader>(makeUrl(path), user_, pass_, offset);
+    if (!reader->start(errOut))
+        return nullptr;
+    return reader;
 }
 
 bool WebDavProvider::writeFile(const std::string& path, const void* data, size_t size,

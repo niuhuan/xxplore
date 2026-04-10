@@ -36,6 +36,8 @@ public:
                     std::string& errOut) override;
     bool readFile(const std::string& path, uint64_t offset, size_t size,
                   void* outBuffer, std::string& errOut) override;
+    std::unique_ptr<SequentialFileReader>
+    openSequentialRead(const std::string& path, uint64_t offset, std::string& errOut) override;
     bool writeFile(const std::string& path, const void* data, size_t size,
                    std::string& errOut) override;
     bool uploadFromProvider(FileProvider* srcProv, const std::string& srcPath,

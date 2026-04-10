@@ -71,6 +71,7 @@ struct TransferResult {
 ///   - "sdmc:/some/path"          → LocalFileProvider
 ///   - "webdav-{id}:/some/path"   → WebDavProvider with that id
 ///   - "smb-{id}:/some/path"      → SmbProvider with that id
+///   - "ftp-{id}:/some/path"      → FtpProvider with that id
 ///   - "/"                        → virtual root (lists all providers + special entries)
 ///
 /// The prefix (everything before the first ":/") identifies the provider.
@@ -114,6 +115,8 @@ public:
     bool renamePath(const std::string& from, const std::string& to, std::string& errOut);
     bool readFile(const std::string& fullPath, uint64_t offset, size_t size,
                   void* outBuffer, std::string& errOut);
+    std::unique_ptr<SequentialFileReader>
+    openSequentialRead(const std::string& fullPath, uint64_t offset, std::string& errOut);
     bool writeFile(const std::string& fullPath, const void* data, size_t size,
                    std::string& errOut);
     bool pathExists(const std::string& fullPath);

@@ -28,6 +28,7 @@ private:
     int targetFocusCol_ = 1;
     int buttonFocusCol_ = 1; // 0 cancel, 1 start
     bool open_ = false;
+    bool appletMode_ = false;
     std::string interruptButtonLabel_;
     std::string interruptConfirmTitle_;
     std::string interruptConfirmBody_;

@@ -1,6 +1,7 @@
 #include "application.hpp"
 #include "fs/fs_api.hpp"
 #include "fs/clipboard.hpp"
+#include "fs/ftp_provider.hpp"
 #include "fs/provider_manager.hpp"
 #include "fs/smb_provider.hpp"
 #include "fs/usb_drive_manager.hpp"
@@ -197,7 +198,8 @@ static bool isNetworkProvider(const fs::FileProvider* provider) {
     if (!provider)
         return false;
     return provider->kind() == fs::ProviderKind::WebDav ||
-           provider->kind() == fs::ProviderKind::Smb;
+           provider->kind() == fs::ProviderKind::Smb ||
+           provider->kind() == fs::ProviderKind::Ftp;
 }
 
 static bool isUsbProvider(const fs::FileProvider* provider) {
@@ -532,6 +534,10 @@ int Application::run(int argc, char* argv[]) {
                     drive.id, drive.name, server, share, drive.username, drive.password);
             }
         }
+        else if (drive.type == config::NetworkDriveType::FTP) {
+            prov = std::make_shared<fs::FtpProvider>(
+                drive.id, drive.name, drive.address, drive.username, drive.password);
+        }
         if (prov) provMgr.registerProvider(prov);
     }
     fs::UsbDriveManager usbDriveManager;
@@ -844,6 +850,20 @@ int Application::run(int argc, char* argv[]) {
             [&provMgr](const InstallQueueItem& item, uint64_t offset, size_t size,
                        void* outBuffer, std::string& errOut) {
                 return provMgr.readFile(item.path, offset, size, outBuffer, errOut);
+            };
+        sourceCallbacks->openSequentialRead =
+            [&provMgr](const InstallQueueItem& item, uint64_t offset, std::string& errOut) {
+                auto reader = provMgr.openSequentialRead(item.path, offset, errOut);
+                if (!reader)
+                    return std::unique_ptr<InstallSequentialReader> {};
+                auto sharedReader =
+                    std::shared_ptr<fs::SequentialFileReader>(reader.release());
+                auto seq = std::make_unique<InstallSequentialReader>();
+                seq->read = [reader = std::move(sharedReader)](void* outBuffer, size_t size,
+                                                               std::string& readErr) {
+                    return reader->read(outBuffer, size, readErr);
+                };
+                return seq;
             };
         installerScreen.open(std::move(items), InstallDeleteMode::KeepFiles, appletMode, i18n,
                              sourceCallbacks);
@@ -1261,6 +1281,9 @@ int Application::run(int argc, char* argv[]) {
                         prov = std::make_shared<fs::SmbProvider>(
                             cfg.id, cfg.name, server, share, cfg.username, cfg.password);
                     }
+                } else if (cfg.type == config::NetworkDriveType::FTP) {
+                    prov = std::make_shared<fs::FtpProvider>(
+                        cfg.id, cfg.name, cfg.address, cfg.username, cfg.password);
                 }
 
                 if (!providerErr.empty()) {
@@ -1479,6 +1502,22 @@ int Application::run(int argc, char* argv[]) {
                         [&provMgr](const InstallQueueItem& item, uint64_t offset, size_t size,
                                    void* outBuffer, std::string& errOut) {
                             return provMgr.readFile(item.path, offset, size, outBuffer, errOut);
+                        };
+                    sourceCallbacks->openSequentialRead =
+                        [&provMgr](const InstallQueueItem& item, uint64_t offset,
+                                   std::string& errOut) {
+                            auto reader = provMgr.openSequentialRead(item.path, offset, errOut);
+                            if (!reader)
+                                return std::unique_ptr<InstallSequentialReader> {};
+                            auto sharedReader =
+                                std::shared_ptr<fs::SequentialFileReader>(reader.release());
+                            auto seq = std::make_unique<InstallSequentialReader>();
+                            seq->read = [reader = std::move(sharedReader)](
+                                            void* outBuffer, size_t size,
+                                            std::string& readErr) {
+                                return reader->read(outBuffer, size, readErr);
+                            };
+                            return seq;
                         };
                     installerScreen.open(
                         pendingInstallItems,

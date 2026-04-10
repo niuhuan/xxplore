@@ -18,6 +18,33 @@ SDL_Color withAlpha(SDL_Color color, Uint8 alpha) {
     return color;
 }
 
+int typeIndex(config::NetworkDriveType type) {
+    switch (type) {
+    case config::NetworkDriveType::WebDAV: return 0;
+    case config::NetworkDriveType::SMB2: return 1;
+    case config::NetworkDriveType::FTP: return 2;
+    }
+    return 0;
+}
+
+config::NetworkDriveType typeFromIndex(int index) {
+    switch (index) {
+    case 1: return config::NetworkDriveType::SMB2;
+    case 2: return config::NetworkDriveType::FTP;
+    case 0:
+    default: return config::NetworkDriveType::WebDAV;
+    }
+}
+
+const char* addressHintKey(config::NetworkDriveType type) {
+    switch (type) {
+    case config::NetworkDriveType::WebDAV: return "network_form.address_hint_webdav";
+    case config::NetworkDriveType::SMB2: return "network_form.address_hint_smb2";
+    case config::NetworkDriveType::FTP: return "network_form.address_hint_ftp";
+    }
+    return "network_form.address_hint_webdav";
+}
+
 } // namespace
 
 void NetworkDriveForm::openNew() {
@@ -52,10 +79,10 @@ void NetworkDriveForm::moveVertical(int delta) {
 
 void NetworkDriveForm::moveHorizontal(int delta) {
     if (focusRow_ == kRowType) {
-        // Toggle type
-        config_.type = (config_.type == config::NetworkDriveType::WebDAV)
-                           ? config::NetworkDriveType::SMB2
-                           : config::NetworkDriveType::WebDAV;
+        int next = typeIndex(config_.type) + delta;
+        if (next < 0) next = 2;
+        if (next > 2) next = 0;
+        config_.type = typeFromIndex(next);
     } else if (focusRow_ == kRowButtons) {
         buttonFocusCol_ += delta;
         if (buttonFocusCol_ < 0) buttonFocusCol_ = 1;
@@ -73,15 +100,11 @@ void NetworkDriveForm::activateRow(const I18n& i18n) {
             config_.name = buf;
         break;
     case kRowType:
-        config_.type = (config_.type == config::NetworkDriveType::WebDAV)
-                           ? config::NetworkDriveType::SMB2
-                           : config::NetworkDriveType::WebDAV;
+        config_.type = typeFromIndex((typeIndex(config_.type) + 1) % 3);
         break;
     case kRowAddress: {
-        const char* hint = config_.type == config::NetworkDriveType::WebDAV
-                               ? "http://192.168.1.1/dav"
-                               : "192.168.1.1/share";
-        if (swkbdTextInput(i18n.t("network_form.address"), hint,
+        if (swkbdTextInput(i18n.t("network_form.address"),
+                           i18n.t(addressHintKey(config_.type)),
                            config_.address.c_str(), buf, sizeof(buf)))
             config_.address = buf;
         break;
@@ -115,7 +138,7 @@ NetworkDriveFormAction NetworkDriveForm::handleInput(uint64_t kDown, const I18n&
     const int valueX = x + labelW;
     const int valueW = cardW - 48 - labelW;
     const int typeCellGap = 12;
-    const int typeCellW = (valueW - typeCellGap) / 2;
+    const int typeCellW = (valueW - typeCellGap * 2) / 3;
     const int rowsTopY = cardY + ui::kPanelTitleBarH + 12 + 30;
     const int buttonsY = rowsTopY + (rowH + 8) * 5 + 8;
     const int buttonW = 200;
@@ -129,15 +152,13 @@ NetworkDriveFormAction NetworkDriveForm::handleInput(uint64_t kDown, const I18n&
         int rowY = rowsTopY;
         for (int row = kRowName; row <= kRowPassword; ++row) {
             if (row == kRowType) {
-                if (pointInRect(tap, valueX, rowY, typeCellW, rowH)) {
-                    focusRow_ = kRowType;
-                    config_.type = config::NetworkDriveType::WebDAV;
-                    return NetworkDriveFormAction::None;
-                }
-                if (pointInRect(tap, valueX + typeCellW + typeCellGap, rowY, typeCellW, rowH)) {
-                    focusRow_ = kRowType;
-                    config_.type = config::NetworkDriveType::SMB2;
-                    return NetworkDriveFormAction::None;
+                for (int i = 0; i < 3; ++i) {
+                    int cellX = valueX + i * (typeCellW + typeCellGap);
+                    if (pointInRect(tap, cellX, rowY, typeCellW, rowH)) {
+                        focusRow_ = kRowType;
+                        config_.type = typeFromIndex(i);
+                        return NetworkDriveFormAction::None;
+                    }
                 }
             } else if (pointInRect(tap, x, rowY, cardW - 48, rowH)) {
                 focusRow_ = row;
@@ -226,9 +247,7 @@ void NetworkDriveForm::render(Renderer& renderer, FontManager& fm, const I18n& i
         return std::string(pw.size(), '*');
     };
 
-    const char* addressPlaceholder = config_.type == config::NetworkDriveType::WebDAV
-                                         ? "http://192.168.1.1/dav"
-                                         : "192.168.1.1/share";
+    const char* addressPlaceholder = i18n.t(addressHintKey(config_.type));
 
     Row rows[] = {
         {i18n.t("network_form.name"),     config_.name.empty() ? i18n.t("network_form.name_hint") : config_.name, kRowName},
@@ -257,16 +276,21 @@ void NetworkDriveForm::render(Renderer& renderer, FontManager& fm, const I18n& i
 
         if (row.rowIdx == kRowType) {
             const int typeCellGap = 12;
-            const int typeCellW = (valueW - typeCellGap) / 2;
+            const int typeCellW = (valueW - typeCellGap * 2) / 3;
             struct TypeCell {
                 const char* label;
                 bool active;
                 int x;
             };
             const TypeCell typeCells[] = {
-                {"WebDAV", config_.type == config::NetworkDriveType::WebDAV, valueX},
-                {"SMB2.0", config_.type == config::NetworkDriveType::SMB2,
-                 valueX + typeCellW + typeCellGap},
+                {i18n.t("network_form.type_webdav"),
+                 config_.type == config::NetworkDriveType::WebDAV, valueX},
+                {i18n.t("network_form.type_smb2"),
+                 config_.type == config::NetworkDriveType::SMB2,
+                 valueX + (typeCellW + typeCellGap)},
+                {i18n.t("network_form.type_ftp"),
+                 config_.type == config::NetworkDriveType::FTP,
+                 valueX + 2 * (typeCellW + typeCellGap)},
             };
             for (const auto& cell : typeCells) {
                 SDL_Color typeBg = SURFACE;

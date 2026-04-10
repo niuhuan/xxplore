@@ -4,5 +4,5 @@ Xxplore
 
 一款專業的檔案管理程式。
 您可以自由瀏覽與管理
-SD卡 / WebDav / Samba / USB裝置中的檔案，
+SD卡 / WebDav / Samba / USB裝置 / FTP伺服器 中的檔案，
 也可以安裝 NSP / XCI / NSZ / XCZ。

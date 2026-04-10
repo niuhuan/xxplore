@@ -8,6 +8,7 @@
 #include "ui/theme.hpp"
 #include "util/screen_awake.hpp"
 #include <algorithm>
+#include <cctype>
 #include <cstdio>
 #include <ctime>
 #include <switch.h>
@@ -17,6 +18,21 @@ namespace xxplore {
 namespace {
 
 constexpr int kTitleActionButtonW = 132;
+constexpr SDL_Color kAppletWarningYellow = {0xf5, 0x9e, 0x0b, 0xff};
+
+bool hasCompressedInstallPackage(const std::vector<InstallQueueItem>& items) {
+    for (const auto& item : items) {
+        std::size_t dot = item.path.find_last_of('.');
+        if (dot == std::string::npos)
+            continue;
+        std::string ext = item.path.substr(dot);
+        std::transform(ext.begin(), ext.end(), ext.begin(),
+                       [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
+        if (ext == ".nsz" || ext == ".xcz")
+            return true;
+    }
+    return false;
+}
 
 void drawProgressBar(Renderer& renderer, int x, int y, int w, int h, float progress) {
     if (progress < 0.0f)
@@ -68,6 +84,7 @@ void InstallerScreen::open(std::vector<InstallQueueItem> items, InstallDeleteMod
         items_           = std::move(items);
         deleteMode_      = deleteMode;
         appletMode_      = appletMode;
+        showCompressedAppletWarning_ = appletMode && hasCompressedInstallPackage(items);
         loadingIndex_    = 0;
         totalBytes_      = 0;
         nandFree_        = -1;
@@ -553,6 +570,14 @@ void InstallerScreen::render(Renderer& renderer, FontManager& fm, const I18n& i1
     if (state == State::Ready) {
         fm.drawText(renderer.sdl(), i18n.t("installer.target"), x, y, theme::FONT_SIZE_SMALL,
                     theme::TEXT_SECONDARY);
+        if (showCompressedAppletWarning_) {
+            int hintX = x + fm.measureText(i18n.t("installer.target"), theme::FONT_SIZE_SMALL) + 18;
+            int hintW = cardW - 48 - (hintX - x);
+            if (hintW > 24) {
+                fm.drawTextEllipsis(renderer.sdl(), i18n.t("installer.applet_compressed_warning"),
+                                    hintX, y, theme::FONT_SIZE_SMALL, kAppletWarningYellow, hintW);
+            }
+        }
         y += 22;
 
         struct TargetCell {

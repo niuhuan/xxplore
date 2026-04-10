@@ -604,8 +604,10 @@ FileProvider* ProviderManager::findProviderByDisplayPrefix(const std::string& di
 }
 
 std::string ProviderManager::extractPrefix(const std::string& fullPath) {
-    // Look for ":" that marks end of provider prefix
-    // e.g. "sdmc:/foo" → "sdmc:", "webdav-abc123:/dir" → "webdav-abc123:"
+    auto sepPos = fullPath.rfind(":/");
+    if (sepPos != std::string::npos && sepPos > 0)
+        return fullPath.substr(0, sepPos + 1);
+
     auto colonPos = fullPath.find(':');
     if (colonPos == std::string::npos || colonPos == 0)
         return {};
@@ -738,6 +740,18 @@ bool ProviderManager::readFile(const std::string& fullPath, uint64_t offset,
     return prov->readFile(relPath, offset, size, outBuffer, errOut);
 }
 
+std::unique_ptr<SequentialFileReader>
+ProviderManager::openSequentialRead(const std::string& fullPath, uint64_t offset,
+                                    std::string& errOut) {
+    std::string relPath;
+    FileProvider* prov = resolveProvider(fullPath, relPath);
+    if (!prov) {
+        errOut = "unknown provider";
+        return nullptr;
+    }
+    return prov->openSequentialRead(relPath, offset, errOut);
+}
+
 bool ProviderManager::writeFile(const std::string& fullPath, const void* data,
                                 size_t size, std::string& errOut) {
     std::string relPath;
@@ -777,7 +791,8 @@ bool ProviderManager::isNetworkPath(const std::string& fullPath) const {
     for (const auto& p : providers_) {
         if (p->displayPrefix() != prefix)
             continue;
-        return p->kind() == ProviderKind::WebDav || p->kind() == ProviderKind::Smb;
+        return p->kind() == ProviderKind::WebDav || p->kind() == ProviderKind::Smb ||
+               p->kind() == ProviderKind::Ftp;
     }
     return false;
 }

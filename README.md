@@ -6,7 +6,7 @@ English | [中文](README-zh.md)
 
 ## Features
 
-- Freely browse and manage files on SD card / WebDav / Samba / USB devices, and install NSP / XCI / NSZ / XCZ packages.
+- Freely browse and manage files on SD card / WebDav / Samba / USB devices / FTP server, and install NSP / XCI / NSZ / XCZ packages.
 - Efficient file management with dual-pane mode for faster copy and move operations between different drives.
 - Touchscreen support.
 - Installer buffering with non-linear read/write, keeping network installs fast as well.

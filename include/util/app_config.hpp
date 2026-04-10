@@ -18,13 +18,14 @@ enum class AppLanguage {
 enum class NetworkDriveType {
     WebDAV,
     SMB2,
+    FTP,
 };
 
 struct NetworkDriveConfig {
     std::string id;        // unique id (auto-generated)
     std::string name;      // display name
     NetworkDriveType type = NetworkDriveType::WebDAV;
-    std::string address;   // e.g. "http://192.168.1.1/dav" or "192.168.1.1/share"
+    std::string address;   // e.g. "http://192.168.1.1/dav", "192.168.1.1/share", "ftp://host:21/path"
     std::string username;
     std::string password;
 };

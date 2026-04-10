@@ -17,6 +17,7 @@ namespace xxplore {
 namespace {
 
 constexpr int kTitleActionButtonW = 132;
+constexpr SDL_Color kAppletWarningBlue = theme::PRIMARY;
 
 void drawProgressBar(Renderer& renderer, int x, int y, int w, int h, float progress) {
     if (progress < 0.0f)
@@ -118,6 +119,7 @@ void WebSocketInstallerScreen::open(const I18n& i18n) {
     server_.setTextMap(std::move(textMap));
     util::acquireScreenAwake();
     open_ = true;
+    appletMode_ = appletGetAppletType() == AppletType_LibraryApplet;
     focusRow_ = 1;
     targetFocusCol_ = 1;
     buttonFocusCol_ = 1;
@@ -133,6 +135,7 @@ void WebSocketInstallerScreen::close() {
     server_.stop();
     util::releaseScreenAwake();
     open_ = false;
+    appletMode_ = false;
     interruptButtonLabel_.clear();
     interruptConfirmTitle_.clear();
     interruptConfirmBody_.clear();
@@ -287,6 +290,15 @@ void WebSocketInstallerScreen::render(Renderer& renderer, FontManager& fm, const
         y += 32;
         fm.drawText(renderer.sdl(), i18n.t("websocket_installer.close_hint"), x, y,
                     theme::FONT_SIZE_SMALL, theme::TEXT_SECONDARY);
+        if (appletMode_) {
+            int hintX = x + fm.measureText(i18n.t("websocket_installer.close_hint"),
+                                           theme::FONT_SIZE_SMALL) + 18;
+            int hintW = cardW - 48 - (hintX - x);
+            if (hintW > 24) {
+                fm.drawTextEllipsis(renderer.sdl(), i18n.t("installer.applet_compressed_warning"),
+                                    hintX, y, theme::FONT_SIZE_SMALL, kAppletWarningBlue, hintW);
+            }
+        }
         y += 36;
 
         const int targetW = 180;
@@ -353,6 +365,14 @@ void WebSocketInstallerScreen::render(Renderer& renderer, FontManager& fm, const
                                   : i18n.t("installer.target_sd"));
     fm.drawText(renderer.sdl(), targetLine.c_str(), x, y, theme::FONT_SIZE_SMALL,
                 theme::TEXT_SECONDARY);
+    if (appletMode_) {
+        int hintX = x + fm.measureText(targetLine.c_str(), theme::FONT_SIZE_SMALL) + 18;
+        int hintW = cardW - 48 - (hintX - x);
+        if (hintW > 24) {
+            fm.drawTextEllipsis(renderer.sdl(), i18n.t("installer.applet_compressed_warning"),
+                                hintX, y, theme::FONT_SIZE_SMALL, kAppletWarningBlue, hintW);
+        }
+    }
     y += 24;
 
     std::string urlLine = server_.url();

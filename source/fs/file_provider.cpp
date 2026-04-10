@@ -1,8 +1,57 @@
 #include "fs/file_provider.hpp"
 #include <cstring>
+#include <utility>
 
 namespace xxplore {
 namespace fs {
+
+namespace {
+
+class RangeSequentialFileReader final : public SequentialFileReader {
+public:
+    RangeSequentialFileReader(FileProvider* provider, std::string path, uint64_t offset)
+        : provider_(provider), path_(std::move(path)), offset_(offset) {}
+
+    bool read(void* outBuffer, size_t size, std::string& errOut) override {
+        if (size == 0)
+            return true;
+        if (!provider_) {
+            errOut = "missing provider";
+            return false;
+        }
+        if (!provider_->readFile(path_, offset_, size, outBuffer, errOut))
+            return false;
+        offset_ += size;
+        return true;
+    }
+
+private:
+    FileProvider* provider_ = nullptr;
+    std::string path_;
+    uint64_t offset_ = 0;
+};
+
+} // namespace
+
+ProviderCapabilities FileProvider::capabilities() const {
+    ProviderCapabilities caps;
+    caps.canReadRange = true;
+    caps.canReadSequential = true;
+    caps.canWrite = !isReadOnly();
+    caps.canPartialWrite = supportsPartialWrite();
+    caps.canCreateDirectory = !isReadOnly();
+    caps.canDelete = !isReadOnly();
+    caps.canRename = !isReadOnly();
+    caps.usesUtf8Paths = true;
+    caps.canInstallFromSource = caps.canReadRange && caps.canReadSequential;
+    return caps;
+}
+
+std::unique_ptr<SequentialFileReader>
+FileProvider::openSequentialRead(const std::string& path, uint64_t offset, std::string& errOut) {
+    errOut.clear();
+    return std::make_unique<RangeSequentialFileReader>(this, path, offset);
+}
 
 bool FileProvider::writeFileChunk(const std::string& path, uint64_t offset,
                                   const void* data, size_t size, bool truncate,

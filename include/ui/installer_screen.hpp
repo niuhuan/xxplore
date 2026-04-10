@@ -59,6 +59,7 @@ private:
     std::vector<InstallQueueItem> items_;
     InstallDeleteMode        deleteMode_   = InstallDeleteMode::KeepFiles;
     bool                     appletMode_   = false;
+    bool                     showCompressedAppletWarning_ = false;
     size_t                   loadingIndex_ = 0;
     uint64_t                 totalBytes_   = 0;
     int64_t                  nandFree_     = -1;

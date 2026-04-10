@@ -936,6 +936,9 @@ protected:
     u64 currentOffset = 0;
 };
 
+size_t nczCompressedBufferLimit();
+size_t nczWriteBufferLimit();
+
 class NczBodyWriter final : public NcaBodyWriter {
 public:
     static constexpr u64 kHeaderMagic = 0x4E544345535A434EULL;
@@ -946,6 +949,7 @@ public:
         dctx = ZSTD_createDCtx();
         if (!dctx)
             XP_THROW("Failed to create ZSTD decompressor");
+        zstdOutBuffer.resize(ZSTD_DStreamOutSize());
     }
 
     ~NczBodyWriter() override {
@@ -1063,11 +1067,11 @@ public:
         // Phase 3: Decompress or copy payload.
         if (compressionMode == CompressionMode::Solid) {
             while (size > 0) {
-                u64 chunk = std::min<u64>(size, 0x1000000 - buffer.size());
+                u64 chunk = std::min<u64>(size, nczCompressedBufferLimit() - buffer.size());
                 append(buffer, ptr, chunk);
                 ptr += chunk;
                 size -= chunk;
-                if (buffer.size() >= 0x1000000) {
+                if (buffer.size() >= nczCompressedBufferLimit()) {
                     processChunk(buffer.data(), buffer.size());
                     buffer.clear();
                 }
@@ -1174,9 +1178,9 @@ private:
 
     void appendOutput(const u8* ptr, size_t size) {
         while (size > 0) {
-            size_t writeChunk = std::min<size_t>(0x1000000 - deflateBuffer.size(), size);
+            size_t writeChunk = std::min<size_t>(nczWriteBufferLimit() - deflateBuffer.size(), size);
             append(deflateBuffer, ptr, writeChunk);
-            if (deflateBuffer.size() >= 0x1000000) {
+            if (deflateBuffer.size() >= nczWriteBufferLimit()) {
                 encrypt(deflateBuffer.data(), deflateBuffer.size(), currentOffset);
                 flush();
             }
@@ -1199,14 +1203,15 @@ private:
             } else {
                 if (compressedSize > expectedSize)
                     XP_THROW("Invalid NCZBLOCK compressed block size");
-                std::vector<u8> out(expectedSize);
-                size_t ret = ZSTD_decompressDCtx(dctx, out.data(), out.size(), buffer.data(),
+                if (blockOutBuffer.size() < expectedSize)
+                    blockOutBuffer.resize(expectedSize);
+                size_t ret = ZSTD_decompressDCtx(dctx, blockOutBuffer.data(), expectedSize, buffer.data(),
                                                 compressedSize);
                 if (ZSTD_isError(ret))
                     XP_THROW(ZSTD_getErrorName(ret));
                 if (ret != expectedSize)
                     XP_THROW("NCZBLOCK decompressed block size mismatch");
-                appendOutput(out.data(), out.size());
+                appendOutput(blockOutBuffer.data(), expectedSize);
             }
 
             consumeBuffer(compressedSize);
@@ -1252,12 +1257,11 @@ private:
             size_t readChunk = std::min<u64>(size, ZSTD_DStreamInSize());
             ZSTD_inBuffer input = { ptr, readChunk, 0 };
             while (input.pos < input.size) {
-                std::vector<u8> out(ZSTD_DStreamOutSize());
-                ZSTD_outBuffer output = { out.data(), out.size(), 0 };
+                ZSTD_outBuffer output = { zstdOutBuffer.data(), zstdOutBuffer.size(), 0 };
                 size_t ret = ZSTD_decompressStream(dctx, &output, &input);
                 if (ZSTD_isError(ret))
                     XP_THROW(ZSTD_getErrorName(ret));
-                appendOutput(out.data(), output.pos);
+                appendOutput(zstdOutBuffer.data(), output.pos);
             }
             size -= readChunk;
             ptr += readChunk;
@@ -1275,6 +1279,8 @@ private:
     ZSTD_DCtx* dctx = nullptr;
     std::vector<u8> buffer;
     std::vector<u8> deflateBuffer;
+    std::vector<u8> zstdOutBuffer;
+    std::vector<u8> blockOutBuffer;
     bool sectionsInitialized = false;
     CompressionMode compressionMode = CompressionMode::Detect;
     u64 blockSize = 0;
@@ -1455,10 +1461,20 @@ void finishContainerEntry(uint64_t entrySize) {
     emitProgress(gStreamProgress, 0, 1);
 }
 
-constexpr size_t kInstallReadChunkSize = 0x100000;
+size_t installReadChunkSize() {
+    return appletGetAppletType() == AppletType_LibraryApplet ? 0x40000U : 0x100000U;
+}
 
 size_t installReadAheadBlocks() {
-    return appletGetAppletType() == AppletType_LibraryApplet ? 4U : 8U;
+    return appletGetAppletType() == AppletType_LibraryApplet ? 2U : 8U;
+}
+
+size_t nczCompressedBufferLimit() {
+    return appletGetAppletType() == AppletType_LibraryApplet ? 0x40000U : 0x400000U;
+}
+
+size_t nczWriteBufferLimit() {
+    return appletGetAppletType() == AppletType_LibraryApplet ? 0x40000U : 0x400000U;
 }
 
 class BufferedInstallReader {
@@ -1468,7 +1484,7 @@ public:
 
     BufferedInstallReader(std::string debugPath, ReadFn readFn)
         : debugPath_(std::move(debugPath)), readFn_(std::move(readFn)) {
-        chunkSize_ = kInstallReadChunkSize;
+        chunkSize_ = installReadChunkSize();
         maxBlocks_ = installReadAheadBlocks();
         if (maxBlocks_ == 0)
             maxBlocks_ = 1;
@@ -1910,6 +1926,13 @@ public:
         NcaWriter writer(ncaId, placeholderId, contentStorage);
         u64 fileStart = GetDataOffset() + fileEntry->dataOffset;
         u64 fileOff = 0;
+        std::unique_ptr<InstallSequentialReader> seqReader;
+        if (sourceCallbacks_ && sourceCallbacks_->openSequentialRead) {
+            std::string openErr;
+            seqReader = sourceCallbacks_->openSequentialRead(item_, fileStart, openErr);
+            if (!seqReader)
+                XP_THROW(openErr.empty() ? "Remote sequential reader unavailable" : openErr);
+        }
         BufferedInstallReader reader(item_.path,
                                      [this](uint64_t offset, size_t size, void* outBuffer,
                                             std::string& errOut) {
@@ -1922,9 +1945,11 @@ public:
                                      });
         size_t readSize = reader.chunkSize();
         auto buffer = std::make_unique<u8[]>(readSize);
-        std::string readerErr;
-        if (!reader.start(fileStart, ncaSize, readerErr))
-            XP_THROW(readerErr);
+        if (!seqReader) {
+            std::string readerErr;
+            if (!reader.start(fileStart, ncaSize, readerErr))
+                XP_THROW(readerErr);
+        }
 
         beginContainerEntry(ncaFileName, ncaSize);
         while (fileOff < ncaSize) {
@@ -1933,7 +1958,9 @@ public:
             if (fileOff + chunk >= ncaSize)
                 chunk = static_cast<size_t>(ncaSize - fileOff);
             std::string err;
-            if (!reader.readNext(buffer.get(), chunk, err))
+            bool ok = seqReader ? seqReader->read(buffer.get(), chunk, err)
+                                : reader.readNext(buffer.get(), chunk, err);
+            if (!ok)
                 XP_THROW(err.empty() ? "Remote read failed" : err);
             writer.write(buffer.get(), chunk);
             fileOff += chunk;
@@ -1976,6 +2003,13 @@ public:
         NcaWriter writer(ncaId, placeholderId, contentStorage);
         u64 fileStart = GetDataOffset() + fileEntry->dataOffset;
         u64 fileOff = 0;
+        std::unique_ptr<InstallSequentialReader> seqReader;
+        if (sourceCallbacks_ && sourceCallbacks_->openSequentialRead) {
+            std::string openErr;
+            seqReader = sourceCallbacks_->openSequentialRead(item_, fileStart, openErr);
+            if (!seqReader)
+                XP_THROW(openErr.empty() ? "Remote sequential reader unavailable" : openErr);
+        }
         BufferedInstallReader reader(item_.path,
                                      [this](uint64_t offset, size_t size, void* outBuffer,
                                             std::string& errOut) {
@@ -1988,9 +2022,11 @@ public:
                                      });
         size_t readSize = reader.chunkSize();
         auto buffer = std::make_unique<u8[]>(readSize);
-        std::string readerErr;
-        if (!reader.start(fileStart, ncaSize, readerErr))
-            XP_THROW(readerErr);
+        if (!seqReader) {
+            std::string readerErr;
+            if (!reader.start(fileStart, ncaSize, readerErr))
+                XP_THROW(readerErr);
+        }
 
         beginContainerEntry(ncaFileName, ncaSize);
         while (fileOff < ncaSize) {
@@ -1999,7 +2035,9 @@ public:
             if (fileOff + chunk >= ncaSize)
                 chunk = static_cast<size_t>(ncaSize - fileOff);
             std::string err;
-            if (!reader.readNext(buffer.get(), chunk, err))
+            bool ok = seqReader ? seqReader->read(buffer.get(), chunk, err)
+                                : reader.readNext(buffer.get(), chunk, err);
+            if (!ok)
                 XP_THROW(err.empty() ? "Remote read failed" : err);
             writer.write(buffer.get(), chunk);
             fileOff += chunk;

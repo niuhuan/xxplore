@@ -27,6 +27,100 @@ void debugLog(const char* fmt, ...) {
 #endif
 }
 
+class SmbSequentialReader final : public SequentialFileReader {
+public:
+    SmbSequentialReader(std::string server, std::string share, std::string user,
+                        std::string pass, std::string path)
+        : server_(std::move(server)),
+          share_(std::move(share)),
+          user_(std::move(user)),
+          pass_(std::move(pass)),
+          path_(std::move(path)) {}
+
+    ~SmbSequentialReader() override { close(); }
+
+    bool open(uint64_t offset, std::string& errOut) {
+        close();
+        smb2_ = smb2_init_context();
+        if (!smb2_) {
+            errOut = "smb2_init_context failed";
+            return false;
+        }
+
+        smb2_set_security_mode(smb2_, SMB2_NEGOTIATE_SIGNING_ENABLED);
+        if (!user_.empty()) {
+            smb2_set_user(smb2_, user_.c_str());
+            smb2_set_password(smb2_, pass_.c_str());
+        }
+
+        int rc = smb2_connect_share(smb2_, server_.c_str(), share_.c_str(),
+                                    user_.empty() ? "Guest" : user_.c_str());
+        if (rc < 0) {
+            errOut = smb2_get_error(smb2_);
+            close();
+            return false;
+        }
+
+        fh_ = smb2_open(smb2_, path_.c_str(), O_RDONLY);
+        if (!fh_) {
+            errOut = smb2_get_error(smb2_);
+            close();
+            return false;
+        }
+
+        if (offset > 0) {
+            int64_t seekResult =
+                smb2_lseek(smb2_, fh_, static_cast<int64_t>(offset), SEEK_SET, nullptr);
+            if (seekResult < 0) {
+                errOut = smb2_get_error(smb2_);
+                close();
+                return false;
+            }
+        }
+        return true;
+    }
+
+    bool read(void* outBuffer, size_t size, std::string& errOut) override {
+        size_t totalRead = 0;
+        auto* buf = static_cast<uint8_t*>(outBuffer);
+        while (totalRead < size) {
+            size_t chunk = std::min(size - totalRead, static_cast<size_t>(256 * 1024));
+            int n = smb2_read(smb2_, fh_, buf + totalRead, static_cast<uint32_t>(chunk));
+            if (n < 0) {
+                errOut = smb2_get_error(smb2_);
+                return false;
+            }
+            if (n == 0) {
+                errOut = "unexpected eof";
+                return false;
+            }
+            totalRead += static_cast<size_t>(n);
+        }
+        return true;
+    }
+
+    void close() {
+        if (smb2_ && fh_) {
+            smb2_close(smb2_, fh_);
+            fh_ = nullptr;
+        }
+        if (smb2_) {
+            smb2_disconnect_share(smb2_);
+            smb2_destroy_context(smb2_);
+            smb2_ = nullptr;
+        }
+    }
+
+private:
+    std::string server_;
+    std::string share_;
+    std::string user_;
+    std::string pass_;
+    std::string path_;
+    smb2_context* smb2_ = nullptr;
+    smb2fh* fh_ = nullptr;
+};
+
 } // namespace
 
 SmbProvider::SmbProvider(std::string id, std::string name, std::string server,
@@ -364,6 +458,16 @@ retry_read:
         continue;
     }
     return false;
+}
+
+std::unique_ptr<SequentialFileReader>
+SmbProvider::openSequentialRead(const std::string& path, uint64_t offset,
+                                std::string& errOut) {
+    auto reader = std::make_unique<SmbSequentialReader>(server_, share_, user_, pass_,
+                                                        smbPath(path));
+    if (!reader->open(offset, errOut))
+        return nullptr;
+    return reader;
 }
 
 bool SmbProvider::writeFile(const std::string& path, const void* data, size_t size,

@@ -2,6 +2,7 @@
 #include "fs/fs_api.hpp"
 #include <cstdint>
 #include <functional>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -15,7 +16,26 @@ enum class ProviderKind {
     Local,
     WebDav,
     Smb,
+    Ftp,
     Usb,
+};
+
+struct ProviderCapabilities {
+    bool canReadRange = false;
+    bool canReadSequential = false;
+    bool canWrite = false;
+    bool canPartialWrite = false;
+    bool canCreateDirectory = false;
+    bool canDelete = false;
+    bool canRename = false;
+    bool usesUtf8Paths = true;
+    bool canInstallFromSource = false;
+};
+
+class SequentialFileReader {
+public:
+    virtual ~SequentialFileReader() = default;
+    virtual bool read(void* outBuffer, size_t size, std::string& errOut) = 0;
 };
 
 /// Abstract file system provider. Implementations wrap local FS, WebDAV, SMB2, etc.
@@ -36,6 +56,9 @@ public:
 
     /// Whether paths under this provider support multi-selection for file ops.
     virtual bool allowsSelection() const = 0;
+
+    /// Provider feature summary used by higher layers to adapt UI and transfer strategy.
+    virtual ProviderCapabilities capabilities() const;
 
     /// List directory contents. @p path is relative to provider root (e.g. "/" means provider root).
     /// Returns empty on error (check errOut).
@@ -59,6 +82,11 @@ public:
     /// Read a range of bytes from a file. Used by installer readRange and cross-provider copy.
     virtual bool readFile(const std::string& path, uint64_t offset, size_t size,
                           void* outBuffer, std::string& errOut) = 0;
+
+    /// Open a sequential reader starting at @p offset.
+    /// The default implementation wraps readFile() so existing providers remain compatible.
+    virtual std::unique_ptr<SequentialFileReader>
+    openSequentialRead(const std::string& path, uint64_t offset, std::string& errOut);
 
     /// Write full file from buffer. Creates or overwrites.
     virtual bool writeFile(const std::string& path, const void* data, size_t size,
