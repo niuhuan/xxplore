@@ -915,7 +915,9 @@ int Application::run(int argc, char* argv[]) {
                 return provMgr.readFile(item.path, offset, size, outBuffer, errOut);
             };
         sourceCallbacks->openSequentialRead =
-            [&provMgr](const InstallQueueItem& item, uint64_t offset, std::string& errOut) {
+            [&provMgr](const InstallQueueItem& item, uint64_t offset, uint64_t expectedSize,
+                       std::string& errOut) {
+                (void)expectedSize;
                 auto reader = provMgr.openSequentialRead(item.path, offset, errOut);
                 if (!reader)
                     return std::unique_ptr<InstallSequentialReader> {};
@@ -1577,7 +1579,9 @@ int Application::run(int argc, char* argv[]) {
                         };
                     sourceCallbacks->openSequentialRead =
                         [&provMgr](const InstallQueueItem& item, uint64_t offset,
+                                   uint64_t expectedSize,
                                    std::string& errOut) {
+                            (void)expectedSize;
                             auto reader = provMgr.openSequentialRead(item.path, offset, errOut);
                             if (!reader)
                                 return std::unique_ptr<InstallSequentialReader> {};

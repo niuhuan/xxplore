@@ -13,6 +13,7 @@
 namespace xxplore {
 
 enum class WebInstallTarget { Nand, SdCard };
+struct InstallSequentialReader;
 
 class WebSocketInstallerServer {
 public:
@@ -70,6 +71,13 @@ private:
     bool handleClientBinaryMessage(const std::string& payload);
     bool requestRemoteRead(const std::string& fileId, uint64_t offset, size_t size,
                            void* outBuffer, std::string& errOut);
+    std::unique_ptr<InstallSequentialReader>
+    openRemoteSequentialRead(const std::string& fileId, uint64_t offset, uint64_t expectedSize,
+                             std::string& errOut);
+    bool openRemoteStream(const std::string& fileId, uint64_t offset, uint64_t expectedSize,
+                          uint32_t& streamIdOut, std::string& errOut);
+    bool readRemoteStream(uint32_t streamId, void* outBuffer, size_t size, std::string& errOut);
+    void closeRemoteStream(uint32_t streamId);
     bool sendJsonEvent(const std::string& type, const std::string& message);
     bool sendProgressEvent(float current, float total, const std::string& currentItem);
     bool sendInstallResult(bool ok, const std::string& message);
@@ -122,6 +130,14 @@ private:
     std::string pendingReadError_;
     std::string sessionAbortReason_;
     uint32_t nextReqId_ = 1;
+    bool streamActive_ = false;
+    uint32_t activeStreamId_ = 0;
+    uint64_t activeStreamRemaining_ = 0;
+    std::deque<std::vector<uint8_t>> streamQueue_;
+    std::size_t streamQueueFrontOffset_ = 0;
+    std::size_t streamQueueBytes_ = 0;
+    bool streamFinished_ = false;
+    std::string streamError_;
 };
 
 } // namespace xxplore

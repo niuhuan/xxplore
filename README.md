@@ -9,7 +9,6 @@ English | [中文](README-zh.md)
 - Freely browse and manage files on SD card / WebDav / Samba / USB devices / FTP server, and install NSP / XCI / NSZ / XCZ packages.
 - Efficient file management with dual-pane mode for faster copy and move operations between different drives.
 - Touchscreen support.
-- Installer buffering with non-linear read/write, keeping network installs fast as well.
 - Built-in HTTP server so a PC browser can install software to the Switch without any extra desktop software.
 - External font support for displaying CJK filenames from drives other than the SD card.
 - The dual-threaded, buffered streaming mode enables faster file copying speeds.

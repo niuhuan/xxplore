@@ -34,6 +34,7 @@ struct InstallDataSourceCallbacks {
                        void* outBuffer, std::string& errOut)> readRange;
     std::function<std::unique_ptr<InstallSequentialReader>(const InstallQueueItem& item,
                                                            uint64_t offset,
+                                                           uint64_t expectedSize,
                                                            std::string& errOut)>
         openSequentialRead;
 };

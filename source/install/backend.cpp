@@ -1929,7 +1929,7 @@ public:
         std::unique_ptr<InstallSequentialReader> seqReader;
         if (sourceCallbacks_ && sourceCallbacks_->openSequentialRead) {
             std::string openErr;
-            seqReader = sourceCallbacks_->openSequentialRead(item_, fileStart, openErr);
+            seqReader = sourceCallbacks_->openSequentialRead(item_, fileStart, ncaSize, openErr);
             if (!seqReader)
                 XP_THROW(openErr.empty() ? "Remote sequential reader unavailable" : openErr);
         }
@@ -2006,7 +2006,7 @@ public:
         std::unique_ptr<InstallSequentialReader> seqReader;
         if (sourceCallbacks_ && sourceCallbacks_->openSequentialRead) {
             std::string openErr;
-            seqReader = sourceCallbacks_->openSequentialRead(item_, fileStart, openErr);
+            seqReader = sourceCallbacks_->openSequentialRead(item_, fileStart, ncaSize, openErr);
             if (!seqReader)
                 XP_THROW(openErr.empty() ? "Remote sequential reader unavailable" : openErr);
         }

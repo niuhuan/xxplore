@@ -30,6 +30,9 @@ constexpr char kWsGuid[] = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
 constexpr char kBase64Table[] =
     "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 constexpr char kReadMagic[4] = {'X', 'P', 'R', 'D'};
+constexpr char kStreamMagic[4] = {'X', 'P', 'S', 'D'};
+constexpr uint8_t kStreamFlagFin = 0x01;
+constexpr size_t kWebStreamChunkSize = 256 * 1024;
 
 std::string base64Encode(const uint8_t* data, size_t size) {
     std::string out;
@@ -425,6 +428,14 @@ void WebSocketInstallerServer::workerMain() {
                 pendingReadError_.clear();
                 pendingReadData_.clear();
                 sessionAbortReason_.clear();
+                streamActive_ = false;
+                activeStreamId_ = 0;
+                activeStreamRemaining_ = 0;
+                streamQueue_.clear();
+                streamQueueFrontOffset_ = 0;
+                streamQueueBytes_ = 0;
+                streamFinished_ = false;
+                streamError_.clear();
             }
             appendLog("Browser connected.");
             setStatus(installing_ ? text("status_installing") : text("status_browser_connected"));
@@ -502,6 +513,15 @@ void WebSocketInstallerServer::installWorkerMain(std::vector<RemoteFileEntry> it
                 (dot == std::string::npos || dot <= 4) ? path.substr(4) : path.substr(4, dot - 4);
             return requestRemoteRead(fileId, offset, size, outBuffer, errOut);
         };
+    sourceCallbacks.openSequentialRead =
+        [this](const InstallQueueItem& item, uint64_t offset, uint64_t expectedSize,
+               std::string& errOut) -> std::unique_ptr<InstallSequentialReader> {
+            std::string path = item.path;
+            size_t dot = path.rfind('.');
+            std::string fileId =
+                (dot == std::string::npos || dot <= 4) ? path.substr(4) : path.substr(4, dot - 4);
+            return openRemoteSequentialRead(fileId, offset, expectedSize, errOut);
+        };
 
     std::string err;
     bool ok = runInstallQueue(queue, target_ == WebInstallTarget::Nand, false,
@@ -539,6 +559,14 @@ void WebSocketInstallerServer::installWorkerMain(std::vector<RemoteFileEntry> it
         pendingReadError_.clear();
         pendingReadData_.clear();
         sessionAbortReason_.clear();
+        streamActive_ = false;
+        activeStreamId_ = 0;
+        activeStreamRemaining_ = 0;
+        streamQueue_.clear();
+        streamQueueFrontOffset_ = 0;
+        streamQueueBytes_ = 0;
+        streamFinished_ = false;
+        streamError_.clear();
     }
     closeClientSocket();
 }
@@ -548,6 +576,14 @@ void WebSocketInstallerServer::requestAbortInstall() {
         return;
     abortRequested_ = true;
     abortPendingRead(text("error_user_abort"));
+    {
+        std::lock_guard<std::mutex> lock(sessionMutex_);
+        if (streamActive_ && streamError_.empty()) {
+            streamError_ = text("error_user_abort");
+            streamFinished_ = true;
+            sessionCv_.notify_all();
+        }
+    }
 }
 
 void WebSocketInstallerServer::appendLog(const std::string& line) {
@@ -584,6 +620,16 @@ void WebSocketInstallerServer::closeClientSocket() {
         clientFd_ = -1;
         reason = sessionAbortReason_.empty() ? text("error_browser_disconnected")
                                              : sessionAbortReason_;
+        streamActive_ = false;
+        activeStreamId_ = 0;
+        activeStreamRemaining_ = 0;
+        streamQueue_.clear();
+        streamQueueFrontOffset_ = 0;
+        streamQueueBytes_ = 0;
+        streamFinished_ = true;
+        if (streamError_.empty())
+            streamError_ = reason;
+        sessionCv_.notify_all();
     }
     if (fd >= 0) {
         ::shutdown(fd, SHUT_RDWR);
@@ -804,6 +850,24 @@ bool WebSocketInstallerServer::handleClientTextMessage(const std::string& payloa
         return true;
     }
 
+    if (type == "streamError") {
+        json_object* streamIdObject = nullptr;
+        json_object* messageObject = nullptr;
+        if (json_object_object_get_ex(root, "streamId", &streamIdObject) &&
+            json_object_object_get_ex(root, "message", &messageObject)) {
+            uint32_t streamId = static_cast<uint32_t>(json_object_get_int64(streamIdObject));
+            std::string message = json_object_get_string(messageObject);
+            std::lock_guard<std::mutex> lock(sessionMutex_);
+            if (streamActive_ && streamId == activeStreamId_) {
+                streamError_ = message.empty() ? "Browser stream failed." : message;
+                streamFinished_ = true;
+                sessionCv_.notify_all();
+            }
+        }
+        json_object_put(root);
+        return true;
+    }
+
     json_object_put(root);
     return true;
 }
@@ -813,28 +877,63 @@ bool WebSocketInstallerServer::handleClientBinaryMessage(const std::string& payl
         return true;
 
     const uint8_t* ptr = reinterpret_cast<const uint8_t*>(payload.data());
-    if (std::memcmp(ptr, kReadMagic, 4) != 0)
-        return true;
+    if (std::memcmp(ptr, kReadMagic, 4) == 0) {
+        uint32_t reqId = 0;
+        uint32_t size = 0;
+        parseUint32LE(ptr + 4, reqId);
+        parseUint32LE(ptr + 8, size);
 
-    uint32_t reqId = 0;
-    uint32_t size = 0;
-    parseUint32LE(ptr + 4, reqId);
-    parseUint32LE(ptr + 8, size);
+        std::lock_guard<std::mutex> lock(sessionMutex_);
+        if (!sessionActive_ || reqId != pendingReadReqId_)
+            return true;
+        if (payload.size() != static_cast<size_t>(12 + size)) {
+            appendLog("Remote chunk size mismatch.");
+            pendingReadError_ = "Remote chunk size mismatch.";
+            pendingReadReady_ = true;
+            sessionCv_.notify_all();
+            return true;
+        }
 
-    std::lock_guard<std::mutex> lock(sessionMutex_);
-    if (!sessionActive_ || reqId != pendingReadReqId_)
-        return true;
-    if (payload.size() != static_cast<size_t>(12 + size)) {
-        appendLog("Remote chunk size mismatch.");
-        pendingReadError_ = "Remote chunk size mismatch.";
+        pendingReadData_.assign(ptr + 12, ptr + 12 + size);
+        pendingReadError_.clear();
         pendingReadReady_ = true;
         sessionCv_.notify_all();
         return true;
     }
 
-    pendingReadData_.assign(ptr + 12, ptr + 12 + size);
-    pendingReadError_.clear();
-    pendingReadReady_ = true;
+    if (payload.size() < 13 || std::memcmp(ptr, kStreamMagic, 4) != 0)
+        return true;
+
+    uint32_t streamId = 0;
+    uint32_t size = 0;
+    parseUint32LE(ptr + 4, streamId);
+    parseUint32LE(ptr + 8, size);
+    uint8_t flags = ptr[12];
+
+    std::lock_guard<std::mutex> lock(sessionMutex_);
+    if (!sessionActive_ || !streamActive_ || streamId != activeStreamId_)
+        return true;
+    if (payload.size() != static_cast<size_t>(13 + size)) {
+        appendLog("Remote stream chunk size mismatch.");
+        streamError_ = "Remote stream chunk size mismatch.";
+        streamFinished_ = true;
+        sessionCv_.notify_all();
+        return true;
+    }
+
+    if (size > 0) {
+        if (size > activeStreamRemaining_) {
+            streamError_ = "Remote stream exceeded expected size.";
+            streamFinished_ = true;
+            sessionCv_.notify_all();
+            return true;
+        }
+        streamQueue_.emplace_back(ptr + 13, ptr + 13 + size);
+        streamQueueBytes_ += size;
+        activeStreamRemaining_ -= size;
+    }
+    if ((flags & kStreamFlagFin) != 0)
+        streamFinished_ = true;
     sessionCv_.notify_all();
     return true;
 }
@@ -905,6 +1004,192 @@ bool WebSocketInstallerServer::requestRemoteRead(const std::string& fileId, uint
     pendingReadData_.clear();
     pendingReadError_.clear();
     return true;
+}
+
+std::unique_ptr<InstallSequentialReader>
+WebSocketInstallerServer::openRemoteSequentialRead(const std::string& fileId, uint64_t offset,
+                                                   uint64_t expectedSize,
+                                                   std::string& errOut) {
+    uint32_t streamId = 0;
+    if (!openRemoteStream(fileId, offset, expectedSize, streamId, errOut))
+        return {};
+    auto remaining = std::make_shared<uint64_t>(expectedSize);
+    auto seq = std::make_unique<InstallSequentialReader>();
+    seq->read = [this, streamId, remaining](void* outBuffer, size_t size,
+                                            std::string& readErr) {
+        if (size > *remaining) {
+            readErr = "websocket stream read exceeds expected size";
+            return false;
+        }
+        if (!readRemoteStream(streamId, outBuffer, size, readErr))
+            return false;
+        *remaining -= size;
+        return true;
+    };
+    seq->close = [this, streamId]() {
+        closeRemoteStream(streamId);
+    };
+    return seq;
+}
+
+bool WebSocketInstallerServer::openRemoteStream(const std::string& fileId, uint64_t offset,
+                                                uint64_t expectedSize, uint32_t& streamIdOut,
+                                                std::string& errOut) {
+    int clientFd = -1;
+    uint32_t streamId = 0;
+    {
+        std::lock_guard<std::mutex> lock(sessionMutex_);
+        if (!sessionActive_ || clientFd_ < 0) {
+            errOut = sessionAbortReason_.empty() ? text("error_browser_not_connected")
+                                                 : sessionAbortReason_;
+            return false;
+        }
+        if (streamActive_) {
+            errOut = "websocket stream already active";
+            return false;
+        }
+
+        clientFd = clientFd_;
+        streamId = nextReqId_++;
+        streamActive_ = true;
+        activeStreamId_ = streamId;
+        activeStreamRemaining_ = expectedSize;
+        streamQueue_.clear();
+        streamQueueFrontOffset_ = 0;
+        streamQueueBytes_ = 0;
+        streamFinished_ = false;
+        streamError_.clear();
+    }
+
+    json_object* root = json_object_new_object();
+    jsonAddString(root, "type", "openStream");
+    json_object_object_add(root, "streamId", json_object_new_int64(streamId));
+    jsonAddString(root, "fileId", fileId);
+    json_object_object_add(root, "offset", json_object_new_int64(static_cast<int64_t>(offset)));
+    json_object_object_add(root, "size", json_object_new_int64(static_cast<int64_t>(expectedSize)));
+    json_object_object_add(root, "chunkSize",
+                           json_object_new_int64(static_cast<int64_t>(kWebStreamChunkSize)));
+    std::string message = jsonString(root);
+    json_object_put(root);
+
+    {
+        std::lock_guard<std::mutex> sendLock(sendMutex_);
+        if (clientFd < 0 || !sendWsText(clientFd, message)) {
+            errOut = text("error_send_read_request");
+            std::lock_guard<std::mutex> lock(sessionMutex_);
+            if (streamActive_ && activeStreamId_ == streamId) {
+                streamActive_ = false;
+                activeStreamId_ = 0;
+                activeStreamRemaining_ = 0;
+                streamQueue_.clear();
+                streamQueueFrontOffset_ = 0;
+                streamQueueBytes_ = 0;
+                streamFinished_ = true;
+                streamError_ = errOut;
+                sessionCv_.notify_all();
+            }
+            return false;
+        }
+    }
+
+    streamIdOut = streamId;
+    return true;
+}
+
+bool WebSocketInstallerServer::readRemoteStream(uint32_t streamId, void* outBuffer, size_t size,
+                                                std::string& errOut) {
+    if (size == 0)
+        return true;
+
+    auto* out = static_cast<uint8_t*>(outBuffer);
+    size_t filled = 0;
+    std::unique_lock<std::mutex> lock(sessionMutex_);
+
+    if (!streamActive_ || streamId != activeStreamId_) {
+        errOut = "websocket stream inactive";
+        return false;
+    }
+
+    while (filled < size) {
+        sessionCv_.wait(lock, [this, streamId]() {
+            return stopRequested_ || !sessionActive_ || !streamActive_ || streamId != activeStreamId_ ||
+                   !streamQueue_.empty() || streamFinished_ || !streamError_.empty();
+        });
+
+        if (stopRequested_) {
+            errOut = "Stopped";
+            return false;
+        }
+        if (!sessionActive_) {
+            errOut = sessionAbortReason_.empty() ? text("error_browser_disconnected")
+                                                 : sessionAbortReason_;
+            return false;
+        }
+        if (!streamActive_ || streamId != activeStreamId_) {
+            errOut = "websocket stream inactive";
+            return false;
+        }
+        if (!streamError_.empty()) {
+            errOut = streamError_;
+            return false;
+        }
+        if (streamQueue_.empty()) {
+            if (streamFinished_) {
+                errOut = "unexpected websocket stream eof";
+                return false;
+            }
+            continue;
+        }
+
+        std::vector<uint8_t>& chunk = streamQueue_.front();
+        size_t avail = chunk.size() - streamQueueFrontOffset_;
+        size_t take = std::min(avail, size - filled);
+        std::memcpy(out + filled, chunk.data() + streamQueueFrontOffset_, take);
+        filled += take;
+        streamQueueFrontOffset_ += take;
+        streamQueueBytes_ -= take;
+        if (streamQueueFrontOffset_ >= chunk.size()) {
+            streamQueue_.pop_front();
+            streamQueueFrontOffset_ = 0;
+        }
+    }
+
+    return true;
+}
+
+void WebSocketInstallerServer::closeRemoteStream(uint32_t streamId) {
+    int clientFd = -1;
+    bool shouldNotify = false;
+    {
+        std::lock_guard<std::mutex> lock(sessionMutex_);
+        if (!streamActive_ || streamId != activeStreamId_)
+            return;
+
+        clientFd = clientFd_;
+        shouldNotify = sessionActive_ && clientFd >= 0;
+        streamActive_ = false;
+        activeStreamId_ = 0;
+        activeStreamRemaining_ = 0;
+        streamQueue_.clear();
+        streamQueueFrontOffset_ = 0;
+        streamQueueBytes_ = 0;
+        streamFinished_ = true;
+        streamError_.clear();
+        sessionCv_.notify_all();
+    }
+
+    if (!shouldNotify)
+        return;
+
+    json_object* root = json_object_new_object();
+    jsonAddString(root, "type", "closeStream");
+    json_object_object_add(root, "streamId", json_object_new_int64(streamId));
+    std::string message = jsonString(root);
+    json_object_put(root);
+
+    std::lock_guard<std::mutex> sendLock(sendMutex_);
+    if (clientFd >= 0)
+        sendWsText(clientFd, message);
 }
 
 bool WebSocketInstallerServer::sendJsonEvent(const std::string& type, const std::string& message) {
@@ -1154,6 +1439,7 @@ let connectFailed = false;
 let wsEstablished = false;
 let seq = 1;
 const queue = [];
+let currentStream = null;
 
 function t(key) {
   return Object.prototype.hasOwnProperty.call(TEXT, key) ? TEXT[key] : key;
@@ -1303,6 +1589,9 @@ function startInstallWebSocket() {
   ws.onclose = () => {
     const closingDuringInstall = installActive && !resultCloseExpected;
     const openedBeforeClose = wsEstablished;
+    if (currentStream)
+      currentStream.cancelled = true;
+    currentStream = null;
     ws = null;
     if (closingDuringInstall)
       connectFailed = true;
@@ -1355,6 +1644,77 @@ async function handleReadRequest(message) {
   ws.send(packet);
 }
 
+function cancelCurrentStream(streamId) {
+  if (currentStream && currentStream.id === Number(streamId))
+    currentStream.cancelled = true;
+}
+
+function sleep(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+async function handleOpenStream(message) {
+  const item = queue.find(entry => entry.id === message.fileId);
+  if (!item) {
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({
+        type: "streamError",
+        streamId: Number(message.streamId),
+        message: `Missing file: ${message.fileId || ""}`,
+      }));
+    }
+    return;
+  }
+
+  if (currentStream)
+    currentStream.cancelled = true;
+  const stream = { id: Number(message.streamId), cancelled: false };
+  currentStream = stream;
+  const offset = Number(message.offset || 0);
+  const totalSize = Number(message.size || 0);
+  const chunkSize = Math.max(64 * 1024, Number(message.chunkSize || 0) || 256 * 1024);
+  let sent = 0;
+
+  try {
+    while (!stream.cancelled && sent < totalSize) {
+      if (!ws || ws.readyState !== WebSocket.OPEN)
+        return;
+
+      const take = Math.min(chunkSize, totalSize - sent);
+      const blob = item.file.slice(offset + sent, offset + sent + take);
+      const data = new Uint8Array(await blob.arrayBuffer());
+      if (data.length !== take)
+        throw new Error(`Short browser stream read: expected ${take}, got ${data.length}`);
+
+      const packet = new Uint8Array(13 + data.length);
+      packet[0] = 0x58; packet[1] = 0x50; packet[2] = 0x53; packet[3] = 0x44;
+      const view = new DataView(packet.buffer);
+      view.setUint32(4, stream.id, true);
+      view.setUint32(8, data.length, true);
+      packet[12] = (sent + data.length >= totalSize) ? 0x01 : 0x00;
+      packet.set(data, 13);
+      ws.send(packet);
+      sent += data.length;
+
+      while (!stream.cancelled && ws && ws.readyState === WebSocket.OPEN &&
+             ws.bufferedAmount > chunkSize * 8) {
+        await sleep(8);
+      }
+    }
+  } catch (error) {
+    if (ws && ws.readyState === WebSocket.OPEN && !stream.cancelled) {
+      ws.send(JSON.stringify({
+        type: "streamError",
+        streamId: stream.id,
+        message: error instanceof Error ? error.message : String(error),
+      }));
+    }
+  } finally {
+    if (currentStream === stream)
+      currentStream = null;
+  }
+}
+
 function handleMessage(event) {
   if (typeof event.data !== "string") {
     log(t("page_log_unexpected_binary"));
@@ -1402,6 +1762,14 @@ function handleMessage(event) {
   }
   if (msg.type === "read") {
     handleReadRequest(msg);
+    return;
+  }
+  if (msg.type === "openStream") {
+    handleOpenStream(msg);
+    return;
+  }
+  if (msg.type === "closeStream") {
+    cancelCurrentStream(msg.streamId);
     return;
   }
 }
