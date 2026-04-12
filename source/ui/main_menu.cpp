@@ -45,12 +45,12 @@ MenuCommand BottomMainMenu::cmdAt(int row, int col, const MainMenuState& st) con
     }
     if (row == 3) {
         const MenuCommand m[] = {MenuCommand::Copy, MenuCommand::Cut, MenuCommand::Paste,
-                                 MenuCommand::None};
+                                 MenuCommand::PasteRenamed};
         return m[col];
     }
     if (row == 4) {
         const MenuCommand m[] = {MenuCommand::ViewClipboard, MenuCommand::ClearClipboard,
-                                 MenuCommand::InstallApplications, MenuCommand::None};
+                                 MenuCommand::InstallApplications, MenuCommand::Refresh};
         return m[col];
     }
     if (row == 5) {
@@ -69,11 +69,12 @@ bool BottomMainMenu::cellDisabled(int row, int col, const MainMenuState& st) con
         return d[col];
     }
     if (row == 3) {
-        const bool d[] = {st.disableCopy, st.disableCut, st.disablePaste, true};
+        const bool d[] = {st.disableCopy, st.disableCut, st.disablePaste, st.disablePasteRenamed};
         return d[col];
     }
     if (row == 4) {
-        const bool d[] = {st.disableViewClip, st.disableClearClip, st.disableInstall, true};
+        const bool d[] = {st.disableViewClip, st.disableClearClip, st.disableInstall,
+                          st.disableRefresh};
         return d[col];
     }
     if (row == 5) {
@@ -214,12 +215,16 @@ static const char* labelKey(int row, int col, const MainMenuState& st) {
     }
     if (row == 3) {
         const char* pasteKey = st.pasteFromCut ? "menu.paste_move_here" : "menu.paste_copy_here";
-        const char* k[] = {"menu.copy", "menu.cut", pasteKey, ""};
+        const char* renamePasteKey = st.pasteFromCut ? "menu.paste_move_here_rename"
+                                                     : "menu.paste_copy_here_rename";
+        const char* k[] = {"menu.copy", "menu.cut", pasteKey, renamePasteKey};
         return k[col];
     }
     if (row == 4) {
         const char* k[] = {"menu.clipboard_view", "menu.clipboard_clear",
-                           "menu.install_applications", ""};
+                           st.installIsArchive ? "menu.archive_options"
+                                               : "menu.install_applications",
+                           "menu.refresh"};
         return k[col];
     }
     if (row == 5) {
@@ -308,9 +313,8 @@ void BottomMainMenu::render(Renderer& renderer, FontManager& fm, const I18n& i18
             if (!key || !key[0]) continue;
             SDL_Color colr = dis ? TEXT_DISABLED : (foc ? PRIMARY : MENU_ITEM_TEXT);
             fm.drawTextEllipsis(renderer.sdl(), i18n.t(key), cx + kCellTextPadX,
-                                cy + (MENU_SHEET_CELL_H - FONT_SIZE_MAIN_MENU_ITEM) / 2,
-                                FONT_SIZE_MAIN_MENU_ITEM,
-                                colr, cellW - kCellTextPadX * 2);
+                                cy + ((MENU_SHEET_CELL_H - 5) - FONT_SIZE_MAIN_MENU_ITEM) / 2,
+                                FONT_SIZE_MAIN_MENU_ITEM, colr, cellW - kCellTextPadX * 2);
         }
     }
 }

@@ -14,7 +14,8 @@ class I18n;
 class LoadingOverlay {
 public:
     /// Start the overlay. It becomes visible after delayMs.
-    void show(std::string message, uint32_t timeoutMs = 15000, uint32_t delayMs = 400);
+    void show(std::string message, uint32_t timeoutMs = 15000, uint32_t delayMs = 400,
+              bool cancellable = false);
 
     /// Cancel / hide the overlay.
     void hide();
@@ -33,6 +34,7 @@ private:
     bool        active_    = false;
     bool        visible_   = false;  // becomes true after delay
     bool        timedOut_  = false;
+    bool        cancellable_ = false;
     std::string message_;
     uint32_t    delayMs_   = 400;
     uint32_t    timeoutMs_ = 15000;

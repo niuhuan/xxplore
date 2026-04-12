@@ -1,6 +1,7 @@
 #include "fs/provider_manager.hpp"
 #include "fs/local_provider.hpp"
 #include "fs/webdav_provider.hpp"
+#include "fs/zip_provider.hpp"
 #include <algorithm>
 #include <condition_variable>
 #include <cstdio>
@@ -583,14 +584,40 @@ void ProviderManager::registerProvider(std::shared_ptr<FileProvider> provider) {
 }
 
 void ProviderManager::removeProvider(const std::string& providerId) {
+    std::string displayPrefix;
+    for (const auto& p : providers_) {
+        if (p->providerId() == providerId) {
+            displayPrefix = p->displayPrefix();
+            break;
+        }
+    }
     providers_.erase(
         std::remove_if(providers_.begin(), providers_.end(),
                        [&providerId](const auto& p) { return p->providerId() == providerId; }),
         providers_.end());
+    if (displayPrefix.empty())
+        return;
+
+    const std::string archivePrefix = displayPrefix + "/";
+    archiveProviders_.erase(
+        std::remove_if(archiveProviders_.begin(), archiveProviders_.end(),
+                       [&archivePrefix](const auto& p) {
+                           return p->displayPrefix().rfind(archivePrefix, 0) == 0;
+                       }),
+        archiveProviders_.end());
+}
+
+void ProviderManager::clearProviders() {
+    providers_.clear();
+    archiveProviders_.clear();
+    clearPathLoadCancelToken();
 }
 
 FileProvider* ProviderManager::findProvider(const std::string& providerId) {
     for (auto& p : providers_)
+        if (p->providerId() == providerId)
+            return p.get();
+    for (auto& p : archiveProviders_)
         if (p->providerId() == providerId)
             return p.get();
     return nullptr;
@@ -600,7 +627,67 @@ FileProvider* ProviderManager::findProviderByDisplayPrefix(const std::string& di
     for (auto& p : providers_)
         if (p->displayPrefix() == displayPrefix)
             return p.get();
+    for (auto& p : archiveProviders_)
+        if (p->displayPrefix() == displayPrefix)
+            return p.get();
     return nullptr;
+}
+
+bool ProviderManager::mountZipArchive(const std::string& archiveFullPath, bool appletMode,
+                                      std::string& mountedRootPathOut, std::string& errOut) {
+    mountedRootPathOut.clear();
+    const std::string prefix = archiveFullPath + ":";
+    for (const auto& p : archiveProviders_) {
+        if (p->displayPrefix() != prefix)
+            continue;
+        mountedRootPathOut = prefix + "/";
+        return true;
+    }
+
+    auto provider = createZipProvider(this, archiveFullPath, appletMode, errOut);
+    if (!provider)
+        return false;
+    archiveProviders_.push_back(std::move(provider));
+    mountedRootPathOut = prefix + "/";
+    return true;
+}
+
+void ProviderManager::unmountZipArchive(const std::string& archiveFullPath) {
+    const std::string prefix = archiveFullPath + ":";
+    archiveProviders_.erase(
+        std::remove_if(archiveProviders_.begin(), archiveProviders_.end(),
+                       [&prefix](const auto& p) { return p->displayPrefix() == prefix; }),
+        archiveProviders_.end());
+}
+
+std::vector<std::string> ProviderManager::mountedZipArchivePaths() const {
+    std::vector<std::string> paths;
+    paths.reserve(archiveProviders_.size());
+    for (const auto& p : archiveProviders_) {
+        const std::string prefix = p->displayPrefix();
+        if (!prefix.empty() && prefix.back() == ':')
+            paths.push_back(prefix.substr(0, prefix.size() - 1));
+    }
+    return paths;
+}
+
+void ProviderManager::setPathLoadCancelToken(std::shared_ptr<std::atomic_bool> cancelToken) {
+    std::lock_guard<std::mutex> lock(pathLoadCancelMutex_);
+    pathLoadCancelToken_ = std::move(cancelToken);
+}
+
+void ProviderManager::clearPathLoadCancelToken() {
+    std::lock_guard<std::mutex> lock(pathLoadCancelMutex_);
+    pathLoadCancelToken_.reset();
+}
+
+bool ProviderManager::isPathLoadCancelled() const {
+    std::shared_ptr<std::atomic_bool> cancelToken;
+    {
+        std::lock_guard<std::mutex> lock(pathLoadCancelMutex_);
+        cancelToken = pathLoadCancelToken_;
+    }
+    return cancelToken && cancelToken->load();
 }
 
 std::string ProviderManager::extractPrefix(const std::string& fullPath) {
@@ -634,6 +721,15 @@ FileProvider* ProviderManager::resolveProvider(const std::string& fullPath,
             return p.get();
         }
     }
+    for (auto& p : archiveProviders_) {
+        if (p->displayPrefix() == prefix) {
+            std::string rest = fullPath.substr(prefix.size());
+            if (rest.empty())
+                rest = "/";
+            outRelativePath = rest;
+            return p.get();
+        }
+    }
     return nullptr;
 }
 
@@ -660,7 +756,11 @@ bool ProviderManager::pathAllowsSelection(const std::string& fullPath) const {
 
     for (const auto& p : providers_) {
         if (p->displayPrefix() == prefix)
-            return p->allowsSelection() && !p->isReadOnly();
+            return p->allowsSelection();
+    }
+    for (const auto& p : archiveProviders_) {
+        if (p->displayPrefix() == prefix)
+            return p->allowsSelection();
     }
     return false;
 }
@@ -795,6 +895,15 @@ bool ProviderManager::isNetworkPath(const std::string& fullPath) const {
         return p->kind() == ProviderKind::WebDav || p->kind() == ProviderKind::Smb ||
                p->kind() == ProviderKind::Ftp;
     }
+    for (const auto& p : archiveProviders_) {
+        if (p->displayPrefix() != prefix)
+            continue;
+        std::string outerPath;
+        std::string innerPath;
+        if (splitZipBrowsePath(fullPath, outerPath, innerPath))
+            return isNetworkPath(outerPath);
+        return false;
+    }
     return false;
 }
 
@@ -885,6 +994,12 @@ bool ProviderManager::crossProviderCopy(FileProvider* srcProv,
             return false;
         }
 
+        std::unique_ptr<SequentialFileReader> seqReader;
+        std::string seqErr;
+        seqReader = srcProv->openSequentialRead(srcRel, 0, seqErr);
+        if (!seqReader && !seqErr.empty())
+            errOut = seqErr;
+
         if (dstProv->kind() == ProviderKind::WebDav) {
             auto* webdavDst = static_cast<WebDavProvider*>(dstProv);
             return webdavDst->uploadFromProvider(srcProv, srcRel, dstRel, srcInfo.size,
@@ -903,8 +1018,13 @@ bool ProviderManager::crossProviderCopy(FileProvider* srcProv,
             while (remaining > 0) {
                 size_t chunk = static_cast<size_t>(
                     std::min<uint64_t>(remaining, static_cast<uint64_t>(buf.size())));
-                if (!srcProv->readFile(srcRel, offset, chunk, buf.data(), errOut))
-                    return false;
+                if (seqReader) {
+                    if (!seqReader->read(buf.data(), chunk, errOut))
+                        return false;
+                } else {
+                    if (!srcProv->readFile(srcRel, offset, chunk, buf.data(), errOut))
+                        return false;
+                }
                 if (cb && !cb(dstRel)) {
                     errOut = "interrupted";
                     return false;
@@ -926,9 +1046,14 @@ bool ProviderManager::crossProviderCopy(FileProvider* srcProv,
 
         std::vector<char> buf(static_cast<size_t>(srcInfo.size));
         if (srcInfo.size > 0) {
-            if (!srcProv->readFile(srcRel, 0, static_cast<size_t>(srcInfo.size),
-                                   buf.data(), errOut))
-                return false;
+            if (seqReader) {
+                if (!seqReader->read(buf.data(), static_cast<size_t>(srcInfo.size), errOut))
+                    return false;
+            } else {
+                if (!srcProv->readFile(srcRel, 0, static_cast<size_t>(srcInfo.size),
+                                       buf.data(), errOut))
+                    return false;
+            }
         }
         return dstProv->writeFile(dstRel, buf.data(), buf.size(), errOut);
     }

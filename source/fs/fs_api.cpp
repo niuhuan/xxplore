@@ -334,6 +334,36 @@ bool isInstallPackagePath(const std::string& path) {
     return ext == ".nsp" || ext == ".nsz" || ext == ".xci" || ext == ".xcz";
 }
 
+bool isZipFilePath(const std::string& path) {
+    if (isZipBrowsePath(path))
+        return false;
+    return pathExtensionLower(path) == ".zip";
+}
+
+bool splitZipBrowsePath(const std::string& path, std::string& outerPath, std::string& innerPath) {
+    outerPath.clear();
+    innerPath.clear();
+
+    const std::size_t marker = path.rfind(".zip:/");
+    if (marker == std::string::npos)
+        return false;
+
+    outerPath = path.substr(0, marker + 4);
+    innerPath = path.substr(marker + 4);
+    if (outerPath.empty() || innerPath.empty() || innerPath[0] != ':')
+        return false;
+    innerPath.erase(0, 1);
+    if (innerPath.empty())
+        innerPath = "/";
+    return true;
+}
+
+bool isZipBrowsePath(const std::string& path) {
+    std::string outerPath;
+    std::string innerPath;
+    return splitZipBrowsePath(path, outerPath, innerPath);
+}
+
 std::string formatSize(uint64_t bytes) {
     static const char* kUnits[] = {"B", "K", "M", "G", "T"};
 

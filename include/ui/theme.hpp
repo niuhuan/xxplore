@@ -69,7 +69,7 @@ constexpr int MENU_PADDING     = 8;
 constexpr int MENU_SHEET_MARGIN_X = 20;
 constexpr int MENU_SHEET_TITLE_H  = 54;
 constexpr int MENU_SHEET_CONTEXT_H = 56;
-constexpr int MENU_SHEET_CELL_H   = 50;
+constexpr int MENU_SHEET_CELL_H   = 55;
 constexpr int MENU_SHEET_ROWS     = 5; ///< Action rows under context
 constexpr int MENU_SHEET_ANIM_MS  = 220;
 

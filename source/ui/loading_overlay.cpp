@@ -6,10 +6,12 @@
 
 namespace xxplore {
 
-void LoadingOverlay::show(std::string message, uint32_t timeoutMs, uint32_t delayMs) {
+void LoadingOverlay::show(std::string message, uint32_t timeoutMs, uint32_t delayMs,
+                          bool cancellable) {
     active_    = true;
     visible_   = false;
     timedOut_  = false;
+    cancellable_ = cancellable;
     message_   = std::move(message);
     delayMs_   = delayMs;
     timeoutMs_ = timeoutMs;
@@ -21,6 +23,7 @@ void LoadingOverlay::show(std::string message, uint32_t timeoutMs, uint32_t dela
 void LoadingOverlay::hide() {
     active_  = false;
     visible_ = false;
+    cancellable_ = false;
 }
 
 void LoadingOverlay::update(uint32_t deltaMs) {
@@ -42,7 +45,7 @@ void LoadingOverlay::update(uint32_t deltaMs) {
     }
 }
 
-void LoadingOverlay::render(Renderer& renderer, FontManager& fm, const I18n& /*i18n*/) {
+void LoadingOverlay::render(Renderer& renderer, FontManager& fm, const I18n& i18n) {
     if (!active_ || !visible_) return;
     using namespace theme;
 
@@ -51,7 +54,7 @@ void LoadingOverlay::render(Renderer& renderer, FontManager& fm, const I18n& /*i
 
     // Centered card
     constexpr int cardW = 420;
-    constexpr int cardH = 120;
+    const int cardH = cancellable_ ? 152 : 120;
     int cx = (SCREEN_W - cardW) / 2;
     int cy = (SCREEN_H - cardH) / 2;
 
@@ -62,10 +65,17 @@ void LoadingOverlay::render(Renderer& renderer, FontManager& fm, const I18n& /*i
     static const char* kDots[] = {"", ".", "..", "..."};
     std::string display = message_ + kDots[dotCount_];
 
-    int textY = cy + (cardH - FONT_SIZE_ITEM) / 2;
+    int textY = cancellable_ ? (cy + 42) : (cy + (cardH - FONT_SIZE_ITEM) / 2);
     int textMaxW = cardW - PADDING * 2;
     fm.drawTextEllipsis(renderer.sdl(), display.c_str(), cx + PADDING, textY,
                         FONT_SIZE_ITEM, TEXT, textMaxW);
+
+    if (cancellable_) {
+        const char* hint = i18n.t("modal.interrupt_hint");
+        int hintY = textY + FONT_SIZE_ITEM + 16;
+        fm.drawTextEllipsis(renderer.sdl(), hint, cx + PADDING, hintY, FONT_SIZE_SMALL,
+                            TEXT_DISABLED, textMaxW);
+    }
 }
 
 } // namespace xxplore

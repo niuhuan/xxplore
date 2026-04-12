@@ -1,9 +1,11 @@
 #pragma once
 #include "fs/file_provider.hpp"
 #include "fs/fs_api.hpp"
+#include <atomic>
 #include <cstdint>
 #include <functional>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <vector>
 
@@ -85,11 +87,33 @@ public:
     /// Remove provider by id.
     void removeProvider(const std::string& providerId);
 
+    /// Clear all registered providers and transient archive mounts.
+    void clearProviders();
+
     /// Find a provider by its id. Returns nullptr if not found.
     FileProvider* findProvider(const std::string& providerId);
 
     /// Find a provider by its display prefix exactly as shown in Root.
     FileProvider* findProviderByDisplayPrefix(const std::string& displayPrefix);
+
+    /// Mount a ZIP archive as a transient read-only provider and return its root path.
+    bool mountZipArchive(const std::string& archiveFullPath, bool appletMode,
+                         std::string& mountedRootPathOut, std::string& errOut);
+
+    /// Remove a mounted ZIP archive provider.
+    void unmountZipArchive(const std::string& archiveFullPath);
+
+    /// List currently mounted ZIP archive outer paths.
+    std::vector<std::string> mountedZipArchivePaths() const;
+
+    /// Set a cancel token used by long-running path listing/indexing work.
+    void setPathLoadCancelToken(std::shared_ptr<std::atomic_bool> cancelToken);
+
+    /// Clear the current path-load cancel token.
+    void clearPathLoadCancelToken();
+
+    /// Whether the current path-load work has been cancelled.
+    bool isPathLoadCancelled() const;
 
     /// Resolve a full path to (provider, relativePath). Returns nullptr if virtual root or unknown.
     FileProvider* resolveProvider(const std::string& fullPath, std::string& outRelativePath);
@@ -163,6 +187,9 @@ public:
 
 private:
     std::vector<std::shared_ptr<FileProvider>> providers_;
+    std::vector<std::shared_ptr<FileProvider>> archiveProviders_;
+    mutable std::mutex                         pathLoadCancelMutex_;
+    std::shared_ptr<std::atomic_bool>          pathLoadCancelToken_;
 
     /// Cross-provider recursive copy (streaming).
     bool crossProviderCopy(FileProvider* srcProv, const std::string& srcRel,

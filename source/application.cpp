@@ -28,6 +28,7 @@
 #include "util/screen_awake.hpp"
 
 #include <algorithm>
+#include <atomic>
 #include <csignal>
 #include <cstdlib>
 #include <cstring>
@@ -96,6 +97,7 @@ enum class InputLayer {
     ModalChoice,
     ModalProgress,
     ModalInfo,
+    ModalOptionList,
     ModalInstallPrompt,
     ImageViewer,
     InstallerScreen,
@@ -145,11 +147,15 @@ struct PanelState {
 
 struct PendingPanelLoad {
     bool                  active = false;
+    bool                  blocking = false;
+    bool                  fallbackToUpOnly = false;
     ActivePanel           panel = PANEL_LEFT;
     std::string           path;
     std::vector<ListItem> items;
     std::string           err;
+    bool                  cancelled = false;
     bool                  finished = false;
+    std::shared_ptr<std::atomic_bool> cancelToken;
     std::mutex            mutex;
     std::thread           worker;
 
@@ -529,6 +535,29 @@ static void renderFooter(Renderer& renderer, FontManager& fontManager, const I18
 
 enum class PendingConfirm { None, DeleteItems, PasteChoice, DeleteDrive, UnmountDrive };
 
+struct ZipArchiveItem {
+    std::string path;
+    std::string name;
+};
+
+enum class ZipActionOption {
+    Browse = 0,
+    Test,
+    ExtractHere,
+    ExtractNamedFolder,
+    ExtractOtherPanel,
+    Cancel,
+};
+
+enum class ZipExtractConflictChoice {
+    SkipCurrent = 0,
+    Abort,
+    Overwrite,
+    OverwriteAll,
+    Merge,
+    MergeAll,
+};
+
 } // namespace
 
 int Application::run(int argc, char* argv[]) {
@@ -627,6 +656,7 @@ int Application::run(int argc, char* argv[]) {
     ModalProgress modalProgress;
     ModalErrorAction modalErrorAction;
     ModalInfo modalInfo;
+    ModalOptionList modalOptionList;
     ModalInstallPrompt modalInstallPrompt;
     ImageViewer imageViewer;
     InstallerScreen installerScreen;
@@ -654,9 +684,14 @@ int Application::run(int argc, char* argv[]) {
     std::vector<std::string> pendingDeletePaths;
     std::string              savedDeleteDir;
     int                      savedDeleteCursor = 0;
+    std::vector<fs::TransferEntry> pendingPasteEntries;
+    std::string                   pendingPasteDestDir;
+    int                           pendingPasteCursor = 0;
+    bool                          pendingPasteIsCut = false;
 
     bool appQuit = false;
     std::vector<InstallQueueItem> pendingInstallItems;
+    std::vector<ZipArchiveItem> pendingZipItems;
     PendingPanelLoad pendingPanelLoad;
 
     auto activeRef = [&]() -> PanelState& {
@@ -755,6 +790,84 @@ int Application::run(int argc, char* argv[]) {
         }
     };
 
+    auto normalizeComparablePath = [](const std::string& value) {
+        std::string path = value;
+        while (path.size() > 1 && path.back() == '/')
+            path.pop_back();
+        return path;
+    };
+
+    auto isSameOrUnderPath = [&](const std::string& ancestor, const std::string& path) {
+        const std::string normalizedAncestor = normalizeComparablePath(ancestor);
+        const std::string normalizedPath = normalizeComparablePath(path);
+        if (normalizedPath == normalizedAncestor)
+            return true;
+        if (normalizedPath.size() <= normalizedAncestor.size())
+            return false;
+        if (normalizedPath.compare(0, normalizedAncestor.size(), normalizedAncestor) != 0)
+            return false;
+        const char separator = normalizedPath[normalizedAncestor.size()];
+        return separator == '/' || separator == ':';
+    };
+
+    auto navigatePanelToUpOnly = [&](PanelState& panel, const std::string& targetPath) {
+        std::vector<ListItem> items;
+        if (!fs::ProviderManager::isVirtualRoot(targetPath))
+            items.push_back({"..", findIcon(icons, "back"), ACTION_GO_UP, true, 0, false});
+        panel.path = targetPath;
+        panel.list.setItems(std::move(items), !fs::ProviderManager::isVirtualRoot(targetPath),
+                            false);
+    };
+
+    auto resetPanelsAffectedByPaths = [&](const std::vector<std::string>& paths) {
+        auto resetIfAffected = [&](PanelState& panel) {
+            for (const auto& path : paths) {
+                if (isSameOrUnderPath(path, panel.path)) {
+                    navigatePanel(panel, "/", icons, i18n, provMgr);
+                    return;
+                }
+            }
+        };
+        resetIfAffected(leftPanel);
+        resetIfAffected(rightPanel);
+    };
+
+    auto zipArchiveBrowsedInPanels = [&](const std::string& archivePath) {
+        auto panelUsesArchive = [&](const PanelState& panel) {
+            std::string outerPath;
+            std::string innerPath;
+            return fs::splitZipBrowsePath(panel.path, outerPath, innerPath) &&
+                   outerPath == archivePath;
+        };
+        return panelUsesArchive(leftPanel) || panelUsesArchive(rightPanel);
+    };
+
+    auto syncZipBrowseMounts = [&]() {
+        std::vector<std::string> keepArchives;
+        auto collectPath = [&](const std::string& path) {
+            std::string outerPath;
+            std::string innerPath;
+            if (!fs::splitZipBrowsePath(path, outerPath, innerPath))
+                return;
+            if (std::find(keepArchives.begin(), keepArchives.end(), outerPath) ==
+                keepArchives.end()) {
+                keepArchives.push_back(std::move(outerPath));
+            }
+        };
+        collectPath(leftPanel.path);
+        collectPath(rightPanel.path);
+        if (pendingPanelLoad.active)
+            collectPath(pendingPanelLoad.path);
+
+        for (const auto& archivePath : provMgr.mountedZipArchivePaths()) {
+            if (std::find(keepArchives.begin(), keepArchives.end(), archivePath) !=
+                keepArchives.end()) {
+                continue;
+            }
+            provMgr.unmountZipArchive(archivePath);
+        }
+    };
+
     auto refreshInstallAffectedDirs = [&](const std::vector<std::string>& dirs) {
         bool refreshLeft = false;
         bool refreshRight = false;
@@ -794,19 +907,25 @@ int Application::run(int argc, char* argv[]) {
         return std::string(i18n.t(fallbackKey));
     };
 
-    auto startPathLoad = [&](ActivePanel panel, const std::string& targetPath) {
+    auto startPathLoad = [&](ActivePanel panel, const std::string& targetPath,
+                             bool fallbackToUpOnly) {
         if (pendingPanelLoad.active)
             return;
 
         pendingPanelLoad.join();
         pendingPanelLoad.active = true;
+        pendingPanelLoad.blocking = true;
+        pendingPanelLoad.fallbackToUpOnly = fallbackToUpOnly;
         pendingPanelLoad.panel = panel;
         pendingPanelLoad.path = targetPath;
         pendingPanelLoad.items.clear();
         pendingPanelLoad.err.clear();
+        pendingPanelLoad.cancelled = false;
         pendingPanelLoad.finished = false;
+        pendingPanelLoad.cancelToken = std::make_shared<std::atomic_bool>(false);
+        provMgr.setPathLoadCancelToken(pendingPanelLoad.cancelToken);
 
-        loadingOverlay.show(i18n.t("loading.connecting"), 15000, 180);
+        loadingOverlay.show(i18n.t("loading.connecting"), 15000, 180, true);
 #ifdef XXPLORE_DEBUG
         std::printf("[nav] async load start panel=%s path=%s\n",
                     panel == PANEL_LEFT ? "left" : "right", targetPath.c_str());
@@ -816,24 +935,34 @@ int Application::run(int argc, char* argv[]) {
             std::vector<ListItem> items;
             std::string err;
             buildItemsForPath(targetPath, icons, i18n, provMgr, items, &err);
+            bool cancelled = pendingPanelLoad.cancelToken &&
+                             pendingPanelLoad.cancelToken->load();
 
             std::lock_guard<std::mutex> lock(pendingPanelLoad.mutex);
-            pendingPanelLoad.items = std::move(items);
+            if (!cancelled)
+                pendingPanelLoad.items = std::move(items);
+            else
+                pendingPanelLoad.items.clear();
             pendingPanelLoad.err = std::move(err);
+            pendingPanelLoad.cancelled = cancelled;
             pendingPanelLoad.finished = true;
         });
     };
 
-    auto navigateToPath = [&](ActivePanel panel, const std::string& targetPath) {
+    auto navigateToPath = [&](ActivePanel panel, const std::string& targetPath,
+                              bool fallbackToUpOnly = false) {
         PanelState& targetPanel = panelFor(panel);
-        if (!provMgr.isNetworkPath(targetPath)) {
+        if (!provMgr.isNetworkPath(targetPath) && !fs::isZipBrowsePath(targetPath)) {
             std::string err;
-            if (!navigatePanel(targetPanel, targetPath, icons, i18n, provMgr, &err))
+            if (!navigatePanel(targetPanel, targetPath, icons, i18n, provMgr, &err)) {
+                if (fallbackToUpOnly)
+                    navigatePanelToUpOnly(targetPanel, targetPath);
                 toast.show(i18n.t("error.operation_failed"), err.c_str(), ToastKind::Error, 3200);
+            }
             return;
         }
 
-        startPathLoad(panel, targetPath);
+        startPathLoad(panel, targetPath, fallbackToUpOnly);
     };
 
     auto buildInstallItems = [&](PanelState& panel, bool useSelection) {
@@ -846,6 +975,8 @@ int Application::run(int argc, char* argv[]) {
             if (item.label == ".." || item.action == ACTION_ENTER)
                 return;
             std::string fullPath = fs::joinPath(panel.path, item.label);
+            if (fs::isZipBrowsePath(fullPath))
+                return;
             if (!fs::isInstallPackagePath(fullPath))
                 return;
 
@@ -860,6 +991,32 @@ int Application::run(int argc, char* argv[]) {
             for (int i = 0; i < static_cast<int>(items.size()); i++)
                 if (panel.list.isSelected(i))
                     addIndex(i);
+        } else {
+            addIndex(panel.list.getCursor());
+        }
+        return result;
+    };
+
+    auto buildZipItems = [&](PanelState& panel, bool useSelection) {
+        std::vector<ZipArchiveItem> result;
+        const auto& items = panel.list.getItems();
+        auto addIndex = [&](int index) {
+            if (index < 0 || index >= static_cast<int>(items.size()))
+                return;
+            const ListItem& item = items[index];
+            if (item.label == ".." || item.action == ACTION_ENTER)
+                return;
+            std::string fullPath = fs::joinPath(panel.path, item.label);
+            if (!fs::isZipFilePath(fullPath))
+                return;
+            result.push_back({fullPath, item.label});
+        };
+
+        if (useSelection && panel.list.hasSelection()) {
+            for (int i = 0; i < static_cast<int>(items.size()); ++i) {
+                if (panel.list.isSelected(i))
+                    addIndex(i);
+            }
         } else {
             addIndex(panel.list.getCursor());
         }
@@ -885,6 +1042,25 @@ int Application::run(int argc, char* argv[]) {
         return selectedCount > 0;
     };
 
+    auto allSelectedZipFiles = [&](PanelState& panel) -> bool {
+        if (!panel.list.hasSelection())
+            return false;
+
+        const auto& items = panel.list.getItems();
+        int selectedCount = 0;
+        for (int i = 0; i < static_cast<int>(items.size()); ++i) {
+            if (!panel.list.isSelected(i))
+                continue;
+            selectedCount++;
+            if (items[i].label == ".." || items[i].action == ACTION_ENTER)
+                return false;
+            std::string fullPath = fs::joinPath(panel.path, items[i].label);
+            if (!fs::isZipFilePath(fullPath))
+                return false;
+        }
+        return selectedCount > 0;
+    };
+
     auto openInstallPrompt = [&](std::vector<InstallQueueItem> items) {
         if (items.empty())
             return;
@@ -903,6 +1079,32 @@ int Application::run(int argc, char* argv[]) {
             body += i18n.t("installer.prompt_multi_suffix");
         }
         modalInstallPrompt.open(i18n.t("installer.prompt_title"), body);
+    };
+
+    auto openArchivePrompt = [&](std::vector<ZipArchiveItem> items, bool canBrowse,
+                                 bool canExtractOtherPanel) {
+        if (items.empty())
+            return;
+        pendingZipItems = std::move(items);
+
+        std::string body;
+        if (pendingZipItems.size() == 1) {
+            body = pendingZipItems.front().name;
+        } else {
+            body = std::to_string(pendingZipItems.size());
+            body += i18n.t("zip.prompt_multi_suffix");
+        }
+
+        std::vector<ModalOptionListEntry> options = {
+            {i18n.t("zip.action_browse"), canBrowse},
+            {i18n.t("zip.action_test"), true},
+            {i18n.t("zip.action_extract_here"), true},
+            {i18n.t("zip.action_extract_named_folder"), true},
+            {i18n.t("zip.action_extract_other_panel"), canExtractOtherPanel},
+            {i18n.t("modal.cancel"), true},
+        };
+        modalOptionList.open(i18n.t("zip.prompt_title"), body, std::move(options),
+                             static_cast<int>(ZipActionOption::Cancel));
     };
 
     auto startInstaller = [&](std::vector<InstallQueueItem> items) {
@@ -946,6 +1148,16 @@ int Application::run(int argc, char* argv[]) {
         return std::vector<InstallQueueItem>{};
     };
 
+    auto zipItemsForMenu = [&](PanelState& panel) {
+        bool hasSelection = panel.list.hasSelection();
+        bool currentSelected = hasSelection && panel.list.isSelected(panel.list.getCursor());
+        if (hasSelection && allSelectedZipFiles(panel))
+            return buildZipItems(panel, true);
+        if (!hasSelection || !currentSelected)
+            return buildZipItems(panel, false);
+        return std::vector<ZipArchiveItem>{};
+    };
+
     auto openImageFile = [&](const std::string& path) {
         fs::FileStatInfo statInfo;
         std::string statErr;
@@ -985,6 +1197,19 @@ int Application::run(int argc, char* argv[]) {
             return;
 
         std::string fullPath = fs::joinPath(panel.path, item.label);
+        if (fs::isZipFilePath(fullPath)) {
+            PanelState& other = (&panel == &leftPanel) ? rightPanel : leftPanel;
+            std::string otherRelPath;
+            fs::FileProvider* otherProv = provMgr.resolveProvider(other.path, otherRelPath);
+            bool canExtractOther = otherProv && !fs::ProviderManager::isVirtualRoot(other.path) &&
+                                   !fs::isZipBrowsePath(other.path) && !otherProv->isReadOnly();
+            openArchivePrompt(buildZipItems(panel, false), true, canExtractOther);
+            return;
+        }
+        if (fs::isZipBrowsePath(fullPath)) {
+            toast.show(i18n.t("error.open_not_supported"), item.label.c_str(), ToastKind::Info, 2500);
+            return;
+        }
         if (fs::isInstallPackagePath(fullPath)) {
             openInstallPrompt(buildInstallItems(panel, false));
             return;
@@ -1001,6 +1226,10 @@ int Application::run(int argc, char* argv[]) {
         PanelState& a  = activeRef();
         bool vr        = fs::ProviderManager::isVirtualRoot(a.path);
         bool allow     = provMgr.pathAllowsSelection(a.path);
+        std::string activeRelPath;
+        fs::FileProvider* activeProv = provMgr.resolveProvider(a.path, activeRelPath);
+        bool readOnly = activeProv && activeProv->isReadOnly();
+        bool zipBrowsePath = fs::isZipBrowsePath(a.path);
         FileList& al   = a.list;
 
         if (vr) {
@@ -1010,7 +1239,9 @@ int Application::run(int argc, char* argv[]) {
             st.disableNewFolder = true;
             st.disableDelete = true;
             st.disableCopy = st.disableCut = st.disablePaste = true;
+            st.disablePasteRenamed = true;
             st.disableViewClip = st.disableClearClip = st.disableInstall = true;
+            st.disableRefresh = false;
             st.disableSettings = st.disableHelp = st.disableAbout = st.disableExit = false;
 
             const ListItem* cur = al.getSelectedItem();
@@ -1037,7 +1268,9 @@ int Application::run(int argc, char* argv[]) {
             st.disableSelectToggle = true;
             st.disableRename = st.disableNewFolder = st.disableDelete = true;
             st.disableCopy = st.disableCut = st.disablePaste = true;
+            st.disablePasteRenamed = true;
             st.disableViewClip = st.disableClearClip = st.disableInstall = true;
+            st.disableRefresh = false;
             st.disableSettings = st.disableHelp = st.disableAbout = st.disableExit = false;
             char ctxBuf[256];
             snprintf(ctxBuf, sizeof(ctxBuf), "%s %s", i18n.t("menu.context_current"), a.path.c_str());
@@ -1059,26 +1292,35 @@ int Application::run(int argc, char* argv[]) {
 
         st.disableSelectToggle = onGoUp;
         st.disableRename =
-            (nSel > 1) || onGoUp || (nSel == 0 && (!cur || onGoUp));
-        st.disableNewFolder = false;
+            readOnly || (nSel > 1) || onGoUp || (nSel == 0 && (!cur || onGoUp));
+        st.disableNewFolder = readOnly;
 
         bool canDelete = false;
         if (nSel > 0) canDelete = true;
         if (nSel == 0 && cur && !onGoUp) canDelete = true;
-        st.disableDelete = !canDelete;
+        st.disableDelete = readOnly || !canDelete;
 
         bool hasTarget = (nSel > 0) || (cur && !onGoUp);
-        st.disableCopy = st.disableCut = !hasTarget;
+        st.disableCopy = !hasTarget;
+        st.disableCut = readOnly || zipBrowsePath || !hasTarget;
 
         bool clipEmpty = clipboard.empty();
         bool pasteDis  = clipEmpty;
         st.pasteFromCut = !clipEmpty && clipboard.operation() == fs::ClipboardOp::Cut;
         if (!clipEmpty && !fs::clipboardPasteDestinationAllowed(clipboard, a.path))
             pasteDis = true;
+        if (readOnly || zipBrowsePath)
+            pasteDis = true;
         st.disablePaste     = pasteDis;
+        bool canRenamePaste = !clipEmpty && clipboard.items().size() == 1 &&
+                              !clipboard.items().front().isDirectory;
+        st.disablePasteRenamed = pasteDis || !canRenamePaste;
+        st.disableRefresh = false;
         st.disableViewClip  = clipEmpty;
         st.disableClearClip = clipEmpty;
-        st.disableInstall   = installItemsForMenu(a).empty();
+        const std::vector<ZipArchiveItem> zipItems = zipItemsForMenu(a);
+        st.installIsArchive = !zipItems.empty();
+        st.disableInstall = st.installIsArchive ? zipItems.empty() : installItemsForMenu(a).empty();
         st.disableSettings = st.disableHelp = st.disableAbout = st.disableExit = false;
     };
 
@@ -1220,6 +1462,515 @@ int Application::run(int argc, char* argv[]) {
         return callbacks;
     };
 
+    auto clearPendingPaste = [&]() {
+        pendingPasteEntries.clear();
+        pendingPasteDestDir.clear();
+        pendingPasteCursor = 0;
+        pendingPasteIsCut = false;
+    };
+
+    auto executePendingPaste = [&](fs::TransferStrategy strategy) {
+        if (pendingPasteEntries.empty()) {
+            clearPendingPaste();
+            return;
+        }
+
+        interrupted = false;
+        const char* progressTitle =
+            pendingPasteIsCut ? i18n.t("progress.moving") : i18n.t("progress.copying");
+        modalProgress.open(progressTitle, "");
+        util::acquireScreenAwake();
+        fs::TransferResult transferResult = provMgr.transferEntries(
+            pendingPasteEntries,
+            pendingPasteIsCut ? fs::TransferOperation::Move : fs::TransferOperation::Copy,
+            strategy, makeTransferCallbacks(pendingPasteIsCut ? fs::TransferOperation::Move
+                                                              : fs::TransferOperation::Copy));
+        std::vector<std::string> movedSourcePaths;
+        if (pendingPasteIsCut) {
+            movedSourcePaths.reserve(pendingPasteEntries.size());
+            for (const auto& entry : pendingPasteEntries)
+                movedSourcePaths.push_back(entry.srcPath);
+        }
+        util::releaseScreenAwake();
+        modalProgress.close();
+        clipboard.clear();
+        activeRef().list.clearSelection();
+        refreshPath(pendingPasteDestDir, pendingPasteCursor);
+        if (pendingPasteIsCut && !transferResult.interrupted && !transferResult.aborted)
+            resetPanelsAffectedByPaths(movedSourcePaths);
+
+        if (transferResult.interrupted)
+            toast.show(i18n.t("toast.interrupted"), "", ToastKind::Warning, 4000);
+        else if (transferResult.aborted)
+            toast.show(i18n.t("error.operation_failed"),
+                       transferResult.lastError.c_str(), ToastKind::Error, 3000);
+        else if (transferResult.ignoredErrors)
+            toast.show(i18n.t(pendingPasteIsCut ? "toast.move_had_errors"
+                                                : "toast.copy_had_errors"),
+                       "", ToastKind::Warning, 3200);
+        else
+            toast.show(i18n.t(pendingPasteIsCut ? "toast.moved" : "toast.copied"), "",
+                       ToastKind::Success, 2200);
+        clearPendingPaste();
+    };
+
+    auto beginPaste = [&](std::vector<fs::TransferEntry> entries, bool isCut,
+                          const std::string& destDir, int savedCursor) {
+        if (entries.empty())
+            return;
+
+        pendingPasteEntries = std::move(entries);
+        pendingPasteDestDir = destDir;
+        pendingPasteCursor = savedCursor;
+        pendingPasteIsCut = isCut;
+
+        bool anyExists = false;
+        for (const auto& entry : pendingPasteEntries) {
+            if (provMgr.pathExists(entry.dstPath)) {
+                anyExists = true;
+                break;
+            }
+        }
+
+        if (anyExists) {
+            const char* title = isCut ? i18n.t("confirm.move_conflict_title")
+                                      : i18n.t("confirm.copy_conflict_title");
+            const char* body = isCut ? i18n.t("confirm.move_conflict_body")
+                                     : i18n.t("confirm.copy_conflict_body");
+            modalChoice.open(title, body);
+            pendingConfirm = PendingConfirm::PasteChoice;
+            return;
+        }
+
+        executePendingPaste(fs::TransferStrategy::Simple);
+    };
+
+    auto promptZipConflict = [&](const std::string& archiveName, bool canOverwrite,
+                                 bool canMerge) -> ZipExtractConflictChoice {
+        std::vector<ModalOptionListEntry> options = {
+            {i18n.t("zip.conflict_skip_current"), true},
+            {i18n.t("zip.conflict_abort"), true},
+            {i18n.t("zip.conflict_overwrite"), canOverwrite},
+            {i18n.t("zip.conflict_overwrite_all"), canOverwrite},
+            {i18n.t("zip.conflict_merge"), canMerge},
+            {i18n.t("zip.conflict_merge_all"), canMerge},
+        };
+        std::string body = archiveName;
+        body += "\n";
+        body += i18n.t("zip.conflict_file_exists");
+        modalOptionList.open(i18n.t("zip.conflict_title"), body, std::move(options),
+                             static_cast<int>(ZipExtractConflictChoice::Abort));
+        for (;;) {
+            padUpdate(&pad);
+            u64 k = padGetButtonsDown(&pad);
+            HidTouchScreenState touchState {};
+            hidGetTouchScreenStates(&touchState, 1);
+            TouchTap tap;
+            if (touchState.count > 0 && !touchWasDown) {
+                tap.active = true;
+                tap.x = static_cast<int>(touchState.touches[0].x);
+                tap.y = static_cast<int>(touchState.touches[0].y);
+            }
+            touchWasDown = touchState.count > 0;
+
+            int option = modalOptionList.handleInput(k, &tap);
+            renderScene();
+            int scrimH = theme::HEADER_H + theme::PANEL_CONTENT_H;
+            renderer.drawRectFilled(0, 0, theme::SCREEN_W, scrimH, theme::MENU_SCRIM_CONTENT);
+            renderFooter(renderer, fontManager, i18n, appConfig.touchButtonsEnabled);
+            modalProgress.render(renderer, fontManager, i18n);
+            modalOptionList.render(renderer, fontManager);
+            renderer.present();
+
+            if (option >= 0) {
+                modalOptionList.close();
+                return static_cast<ZipExtractConflictChoice>(option);
+            }
+            SDL_Delay(16);
+        }
+    };
+
+    auto testZipArchives = [&](const std::vector<ZipArchiveItem>& archives) {
+        if (archives.empty())
+            return;
+
+        auto scanEntryBytes = [&](auto&& self, const std::string& fullPath, uint64_t& totalBytes,
+                                  std::string& errOut) -> bool {
+            fs::FileStatInfo info;
+            if (!provMgr.statPath(fullPath, info, errOut))
+                return false;
+            if (!info.exists) {
+                errOut = "zip entry not found";
+                return false;
+            }
+            if (!info.isDirectory) {
+                totalBytes += info.size;
+                return true;
+            }
+            auto entries = provMgr.listDir(fullPath, errOut);
+            if (!errOut.empty())
+                return false;
+            for (const auto& entry : entries) {
+                if (!self(self, fs::joinPath(fullPath, entry.name), totalBytes, errOut))
+                    return false;
+            }
+            return true;
+        };
+
+        auto testEntry = [&](auto&& self, const std::string& fullPath, uint64_t& doneBytes,
+                             uint64_t totalBytes, std::string& errOut) -> bool {
+            fs::FileStatInfo info;
+            if (!provMgr.statPath(fullPath, info, errOut))
+                return false;
+            if (info.isDirectory) {
+                auto entries = provMgr.listDir(fullPath, errOut);
+                if (!errOut.empty())
+                    return false;
+                for (const auto& entry : entries) {
+                    if (!self(self, fs::joinPath(fullPath, entry.name), doneBytes, totalBytes, errOut))
+                        return false;
+                }
+                return true;
+            }
+
+            modalProgress.setDetail(fullPath);
+            modalProgress.setProgress(doneBytes, totalBytes == 0 ? 1 : totalBytes);
+            if (!pumpProgress()) {
+                errOut = "interrupted";
+                return false;
+            }
+
+            auto reader = provMgr.openSequentialRead(fullPath, 0, errOut);
+            if (!reader)
+                return false;
+
+            std::vector<unsigned char> buffer(128 * 1024);
+            uint64_t remaining = info.size;
+            while (remaining > 0) {
+                std::size_t chunk = static_cast<std::size_t>(
+                    std::min<uint64_t>(remaining, static_cast<uint64_t>(buffer.size())));
+                if (!reader->read(buffer.data(), chunk, errOut))
+                    return false;
+                doneBytes += chunk;
+                remaining -= chunk;
+                modalProgress.setDetail(fullPath);
+                modalProgress.setProgress(doneBytes, totalBytes == 0 ? 1 : totalBytes);
+                if (!pumpProgress()) {
+                    errOut = "interrupted";
+                    return false;
+                }
+            }
+            return true;
+        };
+
+        interrupted = false;
+        modalProgress.open(i18n.t("zip.progress_testing"), "");
+        util::acquireScreenAwake();
+
+        bool success = true;
+        std::string err;
+        for (const auto& archive : archives) {
+            std::string rootPath;
+            if (!provMgr.mountZipArchive(archive.path, appletMode, rootPath, err)) {
+                success = false;
+                break;
+            }
+
+            uint64_t totalBytes = 0;
+            if (!scanEntryBytes(scanEntryBytes, rootPath, totalBytes, err)) {
+                if (!zipArchiveBrowsedInPanels(archive.path))
+                    provMgr.unmountZipArchive(archive.path);
+                success = false;
+                break;
+            }
+            uint64_t doneBytes = 0;
+            if (!testEntry(testEntry, rootPath, doneBytes, totalBytes, err)) {
+                if (!zipArchiveBrowsedInPanels(archive.path))
+                    provMgr.unmountZipArchive(archive.path);
+                success = false;
+                break;
+            }
+            if (!zipArchiveBrowsedInPanels(archive.path))
+                provMgr.unmountZipArchive(archive.path);
+        }
+
+        util::releaseScreenAwake();
+        modalProgress.close();
+        activeRef().list.clearSelection();
+
+        if (!success && err == "interrupted") {
+            toast.show(i18n.t("toast.interrupted"), "", ToastKind::Warning, 4000);
+        } else if (!success) {
+            toast.show(i18n.t("error.operation_failed"), err.c_str(), ToastKind::Error, 3200);
+        } else {
+            toast.show(i18n.t("zip.toast_test_ok"), "", ToastKind::Success, 2200);
+        }
+    };
+
+    auto extractZipArchives = [&](const std::vector<ZipArchiveItem>& archives,
+                                  ActivePanel destinationPanel, bool namedFolder) {
+        if (archives.empty())
+            return;
+
+        struct ConflictPolicy {
+            bool overwriteAll = false;
+            bool mergeAll = false;
+        };
+
+        auto extractEntry = [&](auto&& self, const ZipArchiveItem& archive, const std::string& srcPath,
+                                const std::string& dstPath, ConflictPolicy& policy,
+                                std::string& errOut) -> bool {
+            fs::FileStatInfo srcInfo;
+            if (!provMgr.statPath(srcPath, srcInfo, errOut))
+                return false;
+
+            fs::FileStatInfo dstInfo;
+            std::string dstErr;
+            const bool dstExists = provMgr.statPath(dstPath, dstInfo, dstErr) && dstInfo.exists;
+
+            if (!srcInfo.isDirectory) {
+                fs::TransferStrategy strategy = fs::TransferStrategy::Simple;
+                if (dstExists) {
+                    if (policy.overwriteAll) {
+                        strategy = fs::TransferStrategy::Overwrite;
+                    } else {
+                        ZipExtractConflictChoice choice =
+                            promptZipConflict(archive.name, true, false);
+                        switch (choice) {
+                        case ZipExtractConflictChoice::SkipCurrent:
+                            return true;
+                        case ZipExtractConflictChoice::Abort:
+                            errOut = "interrupted";
+                            return false;
+                        case ZipExtractConflictChoice::Overwrite:
+                            strategy = fs::TransferStrategy::Overwrite;
+                            break;
+                        case ZipExtractConflictChoice::OverwriteAll:
+                            policy.overwriteAll = true;
+                            strategy = fs::TransferStrategy::Overwrite;
+                            break;
+                        default:
+                            return true;
+                        }
+                    }
+                }
+
+                fs::TransferResult result = provMgr.transferEntries(
+                    {{srcPath, dstPath}}, fs::TransferOperation::Copy, strategy,
+                    makeTransferCallbacks(fs::TransferOperation::Copy));
+                if (result.interrupted) {
+                    errOut = "interrupted";
+                    return false;
+                }
+                if (result.aborted) {
+                    errOut = result.lastError.empty() ? "copy failed" : result.lastError;
+                    return false;
+                }
+                return true;
+            }
+
+            if (!dstExists) {
+                fs::TransferResult result = provMgr.transferEntries(
+                    {{srcPath, dstPath}}, fs::TransferOperation::Copy,
+                    fs::TransferStrategy::Simple, makeTransferCallbacks(fs::TransferOperation::Copy));
+                if (result.interrupted) {
+                    errOut = "interrupted";
+                    return false;
+                }
+                if (result.aborted) {
+                    errOut = result.lastError.empty() ? "copy failed" : result.lastError;
+                    return false;
+                }
+                return true;
+            }
+
+            if (policy.overwriteAll) {
+                fs::TransferResult result = provMgr.transferEntries(
+                    {{srcPath, dstPath}}, fs::TransferOperation::Copy,
+                    fs::TransferStrategy::Overwrite,
+                    makeTransferCallbacks(fs::TransferOperation::Copy));
+                if (result.interrupted) {
+                    errOut = "interrupted";
+                    return false;
+                }
+                if (result.aborted) {
+                    errOut = result.lastError.empty() ? "copy failed" : result.lastError;
+                    return false;
+                }
+                return true;
+            }
+
+            if (!dstInfo.isDirectory) {
+                ZipExtractConflictChoice choice =
+                    promptZipConflict(archive.name, true, false);
+                switch (choice) {
+                case ZipExtractConflictChoice::SkipCurrent:
+                    return true;
+                case ZipExtractConflictChoice::Abort:
+                    errOut = "interrupted";
+                    return false;
+                case ZipExtractConflictChoice::Overwrite:
+                    break;
+                case ZipExtractConflictChoice::OverwriteAll:
+                    policy.overwriteAll = true;
+                    break;
+                default:
+                    return true;
+                }
+                fs::TransferResult result = provMgr.transferEntries(
+                    {{srcPath, dstPath}}, fs::TransferOperation::Copy,
+                    fs::TransferStrategy::Overwrite,
+                    makeTransferCallbacks(fs::TransferOperation::Copy));
+                if (result.interrupted) {
+                    errOut = "interrupted";
+                    return false;
+                }
+                if (result.aborted) {
+                    errOut = result.lastError.empty() ? "copy failed" : result.lastError;
+                    return false;
+                }
+                return true;
+            }
+
+            bool merge = policy.mergeAll;
+            bool overwrite = false;
+            if (!merge) {
+                ZipExtractConflictChoice choice =
+                    promptZipConflict(archive.name, true, true);
+                switch (choice) {
+                case ZipExtractConflictChoice::SkipCurrent:
+                    return true;
+                case ZipExtractConflictChoice::Abort:
+                    errOut = "interrupted";
+                    return false;
+                case ZipExtractConflictChoice::Overwrite:
+                    overwrite = true;
+                    break;
+                case ZipExtractConflictChoice::OverwriteAll:
+                    policy.overwriteAll = true;
+                    overwrite = true;
+                    break;
+                case ZipExtractConflictChoice::Merge:
+                    merge = true;
+                    break;
+                case ZipExtractConflictChoice::MergeAll:
+                    policy.mergeAll = true;
+                    merge = true;
+                    break;
+                default:
+                    return true;
+                }
+            }
+
+            if (overwrite) {
+                fs::TransferResult result = provMgr.transferEntries(
+                    {{srcPath, dstPath}}, fs::TransferOperation::Copy,
+                    fs::TransferStrategy::Overwrite,
+                    makeTransferCallbacks(fs::TransferOperation::Copy));
+                if (result.interrupted) {
+                    errOut = "interrupted";
+                    return false;
+                }
+                if (result.aborted) {
+                    errOut = result.lastError.empty() ? "copy failed" : result.lastError;
+                    return false;
+                }
+                return true;
+            }
+
+            auto entries = provMgr.listDir(srcPath, errOut);
+            if (!errOut.empty())
+                return false;
+            for (const auto& entry : entries) {
+                std::string childSrc = fs::joinPath(srcPath, entry.name);
+                std::string childDst = fs::joinPath(dstPath, entry.name);
+                if (!self(self, archive, childSrc, childDst, policy, errOut))
+                    return false;
+            }
+            return true;
+        };
+
+        PanelState& dstPanel = panelFor(destinationPanel);
+        const std::string baseDest = dstPanel.path;
+        const int keepCursor = dstPanel.list.getCursor();
+
+        interrupted = false;
+        modalProgress.open(i18n.t("zip.progress_extracting"), "");
+        util::acquireScreenAwake();
+
+        bool success = true;
+        std::string err;
+        ConflictPolicy policy;
+
+        for (const auto& archive : archives) {
+            std::string rootPath;
+            if (!provMgr.mountZipArchive(archive.path, appletMode, rootPath, err)) {
+                success = false;
+                break;
+            }
+
+            if (namedFolder) {
+                std::string folderName = archive.name;
+                std::size_t dot = folderName.rfind('.');
+                if (dot != std::string::npos)
+                    folderName = folderName.substr(0, dot);
+                std::string dstPath = fs::joinPath(baseDest, folderName);
+                if (!extractEntry(extractEntry, archive, rootPath, dstPath, policy, err)) {
+                    if (!zipArchiveBrowsedInPanels(archive.path))
+                        provMgr.unmountZipArchive(archive.path);
+                    success = false;
+                    break;
+                }
+                if (!zipArchiveBrowsedInPanels(archive.path))
+                    provMgr.unmountZipArchive(archive.path);
+                continue;
+            }
+
+            auto entries = provMgr.listDir(rootPath, err);
+            if (!err.empty()) {
+                if (!zipArchiveBrowsedInPanels(archive.path))
+                    provMgr.unmountZipArchive(archive.path);
+                success = false;
+                break;
+            }
+            for (const auto& entry : entries) {
+                std::string srcPath = fs::joinPath(rootPath, entry.name);
+                std::string dstPath = fs::joinPath(baseDest, entry.name);
+                if (!extractEntry(extractEntry, archive, srcPath, dstPath, policy, err)) {
+                    if (!zipArchiveBrowsedInPanels(archive.path))
+                        provMgr.unmountZipArchive(archive.path);
+                    success = false;
+                    break;
+                }
+            }
+            if (!zipArchiveBrowsedInPanels(archive.path))
+                provMgr.unmountZipArchive(archive.path);
+            if (!success)
+                break;
+        }
+
+        util::releaseScreenAwake();
+        modalProgress.close();
+        activeRef().list.clearSelection();
+
+        if (leftPanel.path == baseDest) {
+            leftPanel.list.clearSelection();
+            reloadPanel(leftPanel, icons, i18n, keepCursor, provMgr);
+        }
+        if (rightPanel.path == baseDest) {
+            rightPanel.list.clearSelection();
+            reloadPanel(rightPanel, icons, i18n, keepCursor, provMgr);
+        }
+
+        if (!success && err == "interrupted") {
+            toast.show(i18n.t("toast.interrupted"), "", ToastKind::Warning, 4000);
+        } else if (!success) {
+            toast.show(i18n.t("error.operation_failed"), err.c_str(), ToastKind::Error, 3200);
+        } else {
+            toast.show(i18n.t("zip.toast_extract_ok"), "", ToastKind::Success, 2200);
+        }
+    };
+
     while (appletMainLoop()) {
         uint32_t now   = SDL_GetTicks();
         uint32_t delta = now - lastTick;
@@ -1245,7 +1996,7 @@ int Application::run(int argc, char* argv[]) {
         FileList& activeList = active.list;
         // Touch and gamepad share one dispatcher: only the top-most layer gets this frame's input.
         InputLayer inputLayer = InputLayer::BasePanels;
-        if (pendingPanelLoad.active || loadingOverlay.isActive())
+        if ((pendingPanelLoad.active && pendingPanelLoad.blocking) || loadingOverlay.isActive())
             inputLayer = InputLayer::LoadingOverlay;
         else if (networkDriveForm.isOpen())
             inputLayer = InputLayer::NetworkDriveForm;
@@ -1259,6 +2010,8 @@ int Application::run(int argc, char* argv[]) {
             inputLayer = InputLayer::InstallerScreen;
         else if (imageViewer.isOpen())
             inputLayer = InputLayer::ImageViewer;
+        else if (modalOptionList.isOpen())
+            inputLayer = InputLayer::ModalOptionList;
         else if (modalInstallPrompt.isOpen())
             inputLayer = InputLayer::ModalInstallPrompt;
         else if (modalInfo.isOpen())
@@ -1279,12 +2032,67 @@ int Application::run(int argc, char* argv[]) {
 
         switch (inputLayer) {
         case InputLayer::LoadingOverlay:
+            if ((kDown & HidNpadButton_Minus) && pendingPanelLoad.active &&
+                pendingPanelLoad.cancelToken) {
+                pendingPanelLoad.cancelToken->store(true);
+                pendingPanelLoad.blocking = false;
+                loadingOverlay.hide();
+            }
+            break;
         case InputLayer::ModalProgress:
             break;
 
         case InputLayer::ImageViewer:
             imageViewer.handleInput(kDown);
             break;
+
+        case InputLayer::ModalOptionList: {
+            int option = modalOptionList.handleInput(kDown, &tap);
+            if (option < 0)
+                break;
+
+            modalOptionList.close();
+            std::vector<ZipArchiveItem> zipItems = pendingZipItems;
+            pendingZipItems.clear();
+            if (zipItems.empty())
+                break;
+
+            switch (static_cast<ZipActionOption>(option)) {
+            case ZipActionOption::Browse: {
+                if (zipItems.size() != 1)
+                    break;
+                std::string mountedRootPath;
+                std::string err;
+                if (!provMgr.mountZipArchive(zipItems.front().path, appletMode,
+                                             mountedRootPath, err)) {
+                    toast.show(i18n.t("error.operation_failed"), err.c_str(),
+                               ToastKind::Error, 3200);
+                    break;
+                }
+                activeList.clearSelection();
+                navigateToPath(activePanel, mountedRootPath);
+                break;
+            }
+            case ZipActionOption::Test:
+                testZipArchives(zipItems);
+                break;
+            case ZipActionOption::ExtractHere:
+                extractZipArchives(zipItems, activePanel, false);
+                break;
+            case ZipActionOption::ExtractNamedFolder:
+                extractZipArchives(zipItems, activePanel, true);
+                break;
+            case ZipActionOption::ExtractOtherPanel:
+                extractZipArchives(zipItems,
+                                   activePanel == PANEL_LEFT ? PANEL_RIGHT : PANEL_LEFT,
+                                   false);
+                break;
+            case ZipActionOption::Cancel:
+            default:
+                break;
+            }
+            break;
+        }
 
         case InputLayer::SettingsScreen: {
             SettingsAction action = settingsScreen.handleInput(kDown, &tap);
@@ -1437,9 +2245,12 @@ int Application::run(int argc, char* argv[]) {
                     fs::TransferResult deleteResult = provMgr.deleteEntries(
                         pendingDeletePaths,
                         makeTransferCallbacks(fs::TransferOperation::Delete));
+                    const std::vector<std::string> affectedPaths = pendingDeletePaths;
                     util::releaseScreenAwake();
                     modalProgress.close();
                     refreshPath(savedDeleteDir, savedDeleteCursor);
+                    if (!deleteResult.interrupted && !deleteResult.aborted)
+                        resetPanelsAffectedByPaths(affectedPaths);
                     pendingDeletePaths.clear();
                     if (deleteResult.interrupted) {
                         toast.show(i18n.t("toast.interrupted"), "", ToastKind::Warning, 4000);
@@ -1520,49 +2331,27 @@ int Application::run(int argc, char* argv[]) {
                 modalChoice.close();
                 if (ch == ChoiceResult::Cancel || pendingConfirm != PendingConfirm::PasteChoice) {
                     pendingConfirm = PendingConfirm::None;
+                    clearPendingPaste();
                 } else {
                     pendingConfirm = PendingConfirm::None;
-                    bool isCut = (clipboard.operation() == fs::ClipboardOp::Cut);
-                    std::string destDir = active.path;
-                    int savedCursor = activeList.getCursor();
-                    interrupted = false;
-                    const char* progressTitle = isCut ? i18n.t("progress.moving") : i18n.t("progress.copying");
-                    modalProgress.open(progressTitle, "");
-                    std::vector<fs::TransferEntry> transferEntries;
-                    transferEntries.reserve(clipboard.items().size());
-                    for (const auto& e : clipboard.items())
-                        transferEntries.push_back({e.fullPath, fs::joinPath(destDir, e.name)});
                     fs::TransferStrategy strategy = ch == ChoiceResult::Merge
                         ? fs::TransferStrategy::Merge
                         : fs::TransferStrategy::Overwrite;
-                    util::acquireScreenAwake();
-                    fs::TransferResult transferResult = provMgr.transferEntries(
-                        transferEntries,
-                        isCut ? fs::TransferOperation::Move : fs::TransferOperation::Copy,
-                        strategy, makeTransferCallbacks(isCut ? fs::TransferOperation::Move
-                                                              : fs::TransferOperation::Copy));
-                    util::releaseScreenAwake();
-                    modalProgress.close();
-                    clipboard.clear();
-                    activeList.clearSelection();
-                    refreshPath(destDir, savedCursor);
-                    if (transferResult.interrupted)
-                        toast.show(i18n.t("toast.interrupted"), "", ToastKind::Warning, 4000);
-                    else if (transferResult.aborted)
-                        toast.show(i18n.t("error.operation_failed"),
-                                   transferResult.lastError.c_str(), ToastKind::Error, 3000);
-                    else if (transferResult.ignoredErrors)
-                        toast.show(i18n.t(isCut ? "toast.move_had_errors" : "toast.copy_had_errors"),
-                                   "", ToastKind::Warning, 3200);
-                    else
-                        toast.show(i18n.t(isCut ? "toast.moved" : "toast.copied"), "", ToastKind::Success, 2200);
+                    executePendingPaste(strategy);
                 }
             }
             break;
         }
 
         case InputLayer::ModalInfo:
-            if (modalInfo.handleInput(kDown, &tap) != ConfirmResult::None) modalInfo.close();
+            if (modalInfo.handleInput(kDown, &tap) != ConfirmResult::None) {
+                bool clearClipboardFromInfo = modalInfo.takeActionRequested();
+                modalInfo.close();
+                if (clearClipboardFromInfo) {
+                    clipboard.clear();
+                    toast.show(i18n.t("toast.clipboard_cleared"), "", ToastKind::Info, 2000);
+                }
+            }
             break;
 
         case InputLayer::ModalInstallPrompt: {
@@ -1725,7 +2514,18 @@ int Application::run(int argc, char* argv[]) {
                         bool currentSelected =
                             activeList.hasSelection() && activeList.isSelected(activeList.getCursor());
                         if (activeList.hasSelection() && currentSelected) {
-                            if (allSelectedInstallPackages(active))
+                            PanelState& other = activePanel == PANEL_LEFT ? rightPanel : leftPanel;
+                            std::string otherRelPath;
+                            fs::FileProvider* otherProv = provMgr.resolveProvider(other.path, otherRelPath);
+                            bool canExtractOther = otherProv &&
+                                                   !fs::ProviderManager::isVirtualRoot(other.path) &&
+                                                   !fs::isZipBrowsePath(other.path) &&
+                                                   !otherProv->isReadOnly();
+                            if (allSelectedZipFiles(active))
+                                openArchivePrompt(buildZipItems(active, true),
+                                                  activeList.selectionCount() == 1,
+                                                  canExtractOther);
+                            else if (allSelectedInstallPackages(active))
                                 openInstallPrompt(buildInstallItems(active, true));
                             else
                                 toast.show(i18n.t("error.multi_open_not_supported"), "",
@@ -1739,7 +2539,7 @@ int Application::run(int argc, char* argv[]) {
                             navigateToPath(activePanel, target);
                         }
                     } else if (item->action == ACTION_GO_UP) {
-                        navigateToPath(activePanel, fs::parentPath(active.path));
+                        navigateToPath(activePanel, fs::parentPath(active.path), true);
                     } else if (item->action == ACTION_WEBSOCKET_INSTALLER) {
                         activeList.clearSelection();
                         webSocketInstallerScreen.open(i18n);
@@ -1753,7 +2553,18 @@ int Application::run(int argc, char* argv[]) {
                         bool hasSelection    = activeList.hasSelection();
                         bool currentSelected = hasSelection && activeList.isSelected(activeList.getCursor());
                         if (hasSelection && currentSelected) {
-                            if (allSelectedInstallPackages(active))
+                            PanelState& other = activePanel == PANEL_LEFT ? rightPanel : leftPanel;
+                            std::string otherRelPath;
+                            fs::FileProvider* otherProv = provMgr.resolveProvider(other.path, otherRelPath);
+                            bool canExtractOther = otherProv &&
+                                                   !fs::ProviderManager::isVirtualRoot(other.path) &&
+                                                   !fs::isZipBrowsePath(other.path) &&
+                                                   !otherProv->isReadOnly();
+                            if (allSelectedZipFiles(active))
+                                openArchivePrompt(buildZipItems(active, true),
+                                                  activeList.selectionCount() == 1,
+                                                  canExtractOther);
+                            else if (allSelectedInstallPackages(active))
                                 openInstallPrompt(buildInstallItems(active, true));
                             else
                                 toast.show(i18n.t("error.multi_open_not_supported"), "",
@@ -1769,7 +2580,7 @@ int Application::run(int argc, char* argv[]) {
 
             if (baseKDown & HidNpadButton_B) {
                 if (!fs::ProviderManager::isVirtualRoot(active.path))
-                    navigateToPath(activePanel, fs::parentPath(active.path));
+                    navigateToPath(activePanel, fs::parentPath(active.path), true);
             }
 
             if (baseKDown & HidNpadButton_Y) activeList.toggleSelect();
@@ -1827,7 +2638,8 @@ int Application::run(int argc, char* argv[]) {
                     body += '\n';
                 }
                 if (clipboard.items().empty()) body += i18n.t("clipboard.empty");
-                modalInfo.open(i18n.t("menu.clipboard_view"), body);
+                modalInfo.open(i18n.t("menu.clipboard_view"), body, 0,
+                               i18n.t("clipboard.clear_action"));
                 mainMenu.close();
                 break;
             }
@@ -1837,6 +2649,21 @@ int Application::run(int argc, char* argv[]) {
                 mainMenu.close();
                 break;
             case MenuCommand::InstallApplications: {
+                std::vector<ZipArchiveItem> zipItems = zipItemsForMenu(active);
+                if (!zipItems.empty()) {
+                    PanelState& other = activePanel == PANEL_LEFT ? rightPanel : leftPanel;
+                    std::string otherRelPath;
+                    fs::FileProvider* otherProv = provMgr.resolveProvider(other.path, otherRelPath);
+                    bool canExtractOther = otherProv &&
+                                           !fs::ProviderManager::isVirtualRoot(other.path) &&
+                                           !fs::isZipBrowsePath(other.path) &&
+                                           !otherProv->isReadOnly();
+                    bool canBrowse = zipItems.size() == 1;
+                    mainMenu.close();
+                    openArchivePrompt(std::move(zipItems), canBrowse, canExtractOther);
+                    break;
+                }
+
                 std::vector<InstallQueueItem> items = installItemsForMenu(active);
                 if (items.empty()) {
                     mainMenu.close();
@@ -1881,60 +2708,49 @@ int Application::run(int argc, char* argv[]) {
                 mainMenu.close();
                 break;
             }
-            case MenuCommand::Paste: {
+            case MenuCommand::Paste:
+            case MenuCommand::PasteRenamed: {
                 if (clipboard.empty()) break;
                 if (!fs::clipboardPasteDestinationAllowed(clipboard, active.path)) {
                     toast.show(i18n.t("error.operation_failed"), i18n.t("error.paste_forbidden"), ToastKind::Warning, 3200);
                     break;
                 }
-                mainMenu.close();
-                // Check if any destination already exists
-                bool anyExists = false;
-                for (const auto& e : clipboard.items()) {
-                    if (provMgr.pathExists(fs::joinPath(active.path, e.name))) { anyExists = true; break; }
+                const bool renamePaste = cmd == MenuCommand::PasteRenamed;
+                if (renamePaste &&
+                    (clipboard.items().size() != 1 || clipboard.items().front().isDirectory)) {
+                    break;
                 }
-                if (anyExists) {
-                    bool isCut = (clipboard.operation() == fs::ClipboardOp::Cut);
-                    const char* t = isCut ? i18n.t("confirm.move_conflict_title") : i18n.t("confirm.copy_conflict_title");
-                    const char* b = isCut ? i18n.t("confirm.move_conflict_body") : i18n.t("confirm.copy_conflict_body");
-                    modalChoice.open(t, b);
-                    pendingConfirm = PendingConfirm::PasteChoice;
+                mainMenu.close();
+                bool isCut = (clipboard.operation() == fs::ClipboardOp::Cut);
+                std::string destDir = active.path;
+                int savedCursor = activeList.getCursor();
+                std::vector<fs::TransferEntry> transferEntries;
+                if (renamePaste) {
+                    char buf[256] = {0};
+                    const auto& item = clipboard.items().front();
+                    if (!swkbdTextInput(i18n.t("swkbd.rename_title"),
+                                        i18n.t("swkbd.rename_guide"),
+                                        item.name.c_str(), buf, sizeof(buf))) {
+                        break;
+                    }
+                    std::string newName(buf);
+                    if (!fs::isValidEnglishFileName(newName)) {
+                        toast.show(i18n.t("error.invalid_name"), "", ToastKind::Warning, 3000);
+                        break;
+                    }
+                    transferEntries.push_back({item.fullPath, fs::joinPath(destDir, newName)});
                 } else {
-                    bool isCut = (clipboard.operation() == fs::ClipboardOp::Cut);
-                    std::string destDir = active.path;
-                    int savedCursor = activeList.getCursor();
-                    interrupted = false;
-                    const char* progressTitle = isCut ? i18n.t("progress.moving") : i18n.t("progress.copying");
-                    modalProgress.open(progressTitle, "");
-                    std::vector<fs::TransferEntry> transferEntries;
                     transferEntries.reserve(clipboard.items().size());
                     for (const auto& e : clipboard.items())
                         transferEntries.push_back({e.fullPath, fs::joinPath(destDir, e.name)});
-                    util::acquireScreenAwake();
-                    fs::TransferResult transferResult = provMgr.transferEntries(
-                        transferEntries,
-                        isCut ? fs::TransferOperation::Move : fs::TransferOperation::Copy,
-                        fs::TransferStrategy::Simple,
-                        makeTransferCallbacks(isCut ? fs::TransferOperation::Move
-                                                    : fs::TransferOperation::Copy));
-                    util::releaseScreenAwake();
-                    modalProgress.close();
-                    clipboard.clear();
-                    activeList.clearSelection();
-                    refreshPath(destDir, savedCursor);
-                    if (transferResult.interrupted)
-                        toast.show(i18n.t("toast.interrupted"), "", ToastKind::Warning, 4000);
-                    else if (transferResult.aborted)
-                        toast.show(i18n.t("error.operation_failed"),
-                                   transferResult.lastError.c_str(), ToastKind::Error, 3000);
-                    else if (transferResult.ignoredErrors)
-                        toast.show(i18n.t(isCut ? "toast.move_had_errors" : "toast.copy_had_errors"),
-                                   "", ToastKind::Warning, 3200);
-                    else
-                        toast.show(i18n.t(isCut ? "toast.moved" : "toast.copied"), "", ToastKind::Success, 2200);
                 }
+                beginPaste(std::move(transferEntries), isCut, destDir, savedCursor);
                 break;
             }
+            case MenuCommand::Refresh:
+                mainMenu.close();
+                navigateToPath(activePanel, active.path);
+                break;
             case MenuCommand::Delete: {
                 pendingDeletePaths.clear();
                 const auto& items = activeList.getItems();
@@ -2027,6 +2843,7 @@ int Application::run(int argc, char* argv[]) {
                 }
                 int kc = activeList.getCursor();
                 refreshPath(active.path, kc);
+                resetPanelsAffectedByPaths({from});
                 mainMenu.close();
                 break;
             }
@@ -2081,6 +2898,8 @@ int Application::run(int argc, char* argv[]) {
             bool ready = false;
             std::vector<ListItem> loadedItems;
             std::string loadErr;
+            bool loadCancelled = false;
+            bool fallbackToUpOnly = false;
             ActivePanel loadPanel = pendingPanelLoad.panel;
             std::string loadPath = pendingPanelLoad.path;
             {
@@ -2089,19 +2908,34 @@ int Application::run(int argc, char* argv[]) {
                 if (ready) {
                     loadedItems = std::move(pendingPanelLoad.items);
                     loadErr = std::move(pendingPanelLoad.err);
+                    loadCancelled = pendingPanelLoad.cancelled;
+                    fallbackToUpOnly = pendingPanelLoad.fallbackToUpOnly;
                 }
             }
 
             if (ready) {
                 pendingPanelLoad.join();
                 pendingPanelLoad.active = false;
+                pendingPanelLoad.blocking = false;
+                pendingPanelLoad.fallbackToUpOnly = false;
+                pendingPanelLoad.cancelled = false;
+                pendingPanelLoad.cancelToken.reset();
+                provMgr.clearPathLoadCancelToken();
                 loadingOverlay.hide();
 
-                if (!loadErr.empty()) {
+                if (loadCancelled || loadErr == "cancelled") {
+#ifdef XXPLORE_DEBUG
+                    std::printf("[nav] async load cancelled path=%s\n", loadPath.c_str());
+#endif
+                } else if (!loadErr.empty()) {
 #ifdef XXPLORE_DEBUG
                     std::printf("[nav] async load failed path=%s err=%s\n", loadPath.c_str(),
                                 loadErr.c_str());
 #endif
+                    if (fallbackToUpOnly) {
+                        PanelState& targetPanel = panelFor(loadPanel);
+                        navigatePanelToUpOnly(targetPanel, loadPath);
+                    }
                     toast.show(i18n.t("error.operation_failed"), loadErr.c_str(),
                                ToastKind::Error, 3200);
                 } else {
@@ -2119,6 +2953,8 @@ int Application::run(int argc, char* argv[]) {
             }
         }
 
+        syncZipBrowseMounts();
+
         leftPanel.list.updateCache(renderer, fontManager, theme::ACTIVE_PANEL_W,
                                    theme::PANEL_CONTENT_H);
         rightPanel.list.updateCache(renderer, fontManager, theme::ACTIVE_PANEL_W,
@@ -2128,7 +2964,8 @@ int Application::run(int argc, char* argv[]) {
 
         const bool anyOverlay =
             mainMenu.isOpen() || modalConfirm.isOpen() || modalChoice.isOpen()
-            || modalProgress.isOpen() || modalInfo.isOpen() || modalInstallPrompt.isOpen()
+            || modalProgress.isOpen() || modalInfo.isOpen() || modalOptionList.isOpen()
+            || modalInstallPrompt.isOpen()
             || networkDriveForm.isOpen() || ftpServerScreen.isOpen() || loadingOverlay.isVisible();
         if (anyOverlay && !imageViewer.isOpen() && !installerScreen.isOpen()
             && !settingsScreen.isOpen()
@@ -2149,6 +2986,7 @@ int Application::run(int argc, char* argv[]) {
         modalChoice.render(renderer, fontManager, i18n);
         modalProgress.render(renderer, fontManager, i18n);
         modalInfo.render(renderer, fontManager);
+        modalOptionList.render(renderer, fontManager);
         modalInstallPrompt.render(renderer, fontManager, i18n);
         imageViewer.render(renderer);
         installerScreen.render(renderer, fontManager, i18n);
@@ -2164,13 +3002,15 @@ int Application::run(int argc, char* argv[]) {
         if (appQuit) break;
     }
 
+    pendingPanelLoad.join();
+    provMgr.clearPathLoadCancelToken();
     leftPanel.list.destroyCache();
     rightPanel.list.destroyCache();
     ftpServerScreen.close();
     webSocketInstallerScreen.close();
     usbDriveManager.shutdown();
     // Destroy network providers before socket services are torn down.
-    provMgr = fs::ProviderManager();
+    provMgr.clearProviders();
     for (auto& e : icons)
         if (e.tex) SDL_DestroyTexture(e.tex);
     fontManager.shutdown();

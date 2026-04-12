@@ -46,6 +46,7 @@ LDFLAGS	=	-specs=$(DEVKITPRO)/libnx/switch.specs -g $(ARCH) -Wl,-Map,$(notdir $*
 
 LIBS	:=	-lSDL2_ttf -lSDL2_image -lSDL2_gfx -lpng -ljpeg -lwebp -ljson-c `sdl2-config --libs` `$(PREFIX)pkg-config --libs freetype2`
 LIBS	+=	-lzstd
+LIBS	+=	-lminizip -lz
 LIBS	+=	`$(PREFIX)pkg-config --libs libcurl` -lmbedtls -lmbedx509 -lmbedcrypto
 
 LIBS	+=	-lsmb2

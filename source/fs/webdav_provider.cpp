@@ -86,6 +86,7 @@ struct ProviderReadCtx {
     FileProvider* srcProv = nullptr;
     const std::string* srcPath = nullptr;
     const ProviderProgressCb* progressCb = nullptr;
+    std::unique_ptr<SequentialFileReader> seqReader;
     uint64_t offset = 0;
     uint64_t remaining = 0;
     std::string error;
@@ -308,8 +309,13 @@ size_t curlProviderReadCb(void* ptr, size_t size, size_t nmemb, void* userdata) 
         return CURL_READFUNC_ABORT;
     }
 
-    if (!ctx->srcProv->readFile(*ctx->srcPath, ctx->offset, toRead, ptr, ctx->error))
-        return CURL_READFUNC_ABORT;
+    if (ctx->seqReader) {
+        if (!ctx->seqReader->read(ptr, toRead, ctx->error))
+            return CURL_READFUNC_ABORT;
+    } else {
+        if (!ctx->srcProv->readFile(*ctx->srcPath, ctx->offset, toRead, ptr, ctx->error))
+            return CURL_READFUNC_ABORT;
+    }
 
     ctx->offset += toRead;
     ctx->remaining -= toRead;
@@ -713,6 +719,7 @@ WebDavProvider::CurlResult WebDavProvider::performStreamPut(const std::string& u
     readCtx.progressCb = &cb;
     readCtx.offset = 0;
     readCtx.remaining = size;
+    readCtx.seqReader = srcProv->openSequentialRead(srcPath, 0, readCtx.error);
 
     curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
     curl_easy_setopt(curl, CURLOPT_UPLOAD, 1L);

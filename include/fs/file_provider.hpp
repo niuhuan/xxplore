@@ -18,6 +18,7 @@ enum class ProviderKind {
     Smb,
     Ftp,
     Usb,
+    Zip,
 };
 
 struct ProviderCapabilities {
