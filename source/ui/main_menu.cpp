@@ -49,7 +49,7 @@ MenuCommand BottomMainMenu::cmdAt(int row, int col, const MainMenuState& st) con
         return m[col];
     }
     if (row == 4) {
-        const MenuCommand m[] = {MenuCommand::ViewClipboard, MenuCommand::ClearClipboard,
+        const MenuCommand m[] = {MenuCommand::ViewClipboard, MenuCommand::PackZip,
                                  MenuCommand::InstallApplications, MenuCommand::Refresh};
         return m[col];
     }
@@ -73,7 +73,7 @@ bool BottomMainMenu::cellDisabled(int row, int col, const MainMenuState& st) con
         return d[col];
     }
     if (row == 4) {
-        const bool d[] = {st.disableViewClip, st.disableClearClip, st.disableInstall,
+        const bool d[] = {st.disableViewClip, st.disablePackZip, st.disableInstall,
                           st.disableRefresh};
         return d[col];
     }
@@ -221,7 +221,7 @@ static const char* labelKey(int row, int col, const MainMenuState& st) {
         return k[col];
     }
     if (row == 4) {
-        const char* k[] = {"menu.clipboard_view", "menu.clipboard_clear",
+        const char* k[] = {"menu.clipboard_view", "menu.pack_zip",
                            st.installIsArchive ? "menu.archive_options"
                                                : "menu.install_applications",
                            "menu.refresh"};

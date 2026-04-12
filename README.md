@@ -7,6 +7,8 @@ English | [中文](README-zh.md)
 ## Features
 
 - Freely browse and manage files on SD card / WebDav / Samba / USB devices / FTP server, and install NSP / XCI / NSZ / XCZ packages.
+- Open ZIP archives as virtual folders, browse their contents, test them, and extract them to the current folder, an archive-named folder, or the other pane.
+- Pack the current file / folder or the current multi-selection into a ZIP archive in the current pane or the other pane.
 - Efficient file management with dual-pane mode for faster copy and move operations between different drives.
 - Touchscreen support.
 - Built-in HTTP server so a PC browser can install software to the Switch without any extra desktop software.
@@ -37,6 +39,56 @@ Install:
 - [devkitPro](https://devkitpro.org/) (devkitA64 + libnx + switch portlibs)
 - Python 3
 - [uv](https://github.com/astral-sh/uv)
+
+### Native dependencies
+
+#### minizip (ZIP browse / extract / pack)
+
+Xxplore uses `minizip` for ZIP browsing, extraction and packing.
+
+Under devkitPro for Switch, `minizip` is provided by the `switch-zlib` package. It installs:
+
+- `portlibs/switch/include/minizip/*.h`
+- `portlibs/switch/lib/libminizip.a`
+
+Install it with devkitPro pacman before building Xxplore:
+
+```bash
+# Arch Linux / MSYS2 + devkitPro
+pacman -S switch-zlib
+
+# macOS / Linux without a system pacman
+dkp-pacman -S switch-zlib
+```
+
+If your setup requires elevated privileges for the devkitPro prefix, prepend `sudo`.
+
+#### libusbhsfs (USB Mass Storage)
+
+Xxplore uses [libusbhsfs](https://github.com/DarkMatterCore/libusbhsfs) for USB mass storage mounting.
+
+According to the upstream project, `libusbhsfs` supports two build modes:
+
+- `BUILD_TYPE=ISC`: FAT-only support.
+- `BUILD_TYPE=GPL`: FAT + NTFS-3G + lwext4 support, under GPLv2 or later.
+
+Xxplore's current `Makefile` links `-lusbhsfs -lntfs-3g -llwext4`, so the expected setup is the **GPL build**.
+
+Install the required filesystem portlibs first, then build and install `libusbhsfs`:
+
+```bash
+# Arch Linux / MSYS2 + devkitPro
+pacman -S switch-ntfs-3g switch-lwext4
+
+# macOS / Linux without a system pacman
+dkp-pacman -S switch-ntfs-3g switch-lwext4
+
+git clone https://github.com/DarkMatterCore/libusbhsfs.git
+cd libusbhsfs
+make BUILD_TYPE=GPL install
+```
+
+If you want the upstream debug build with logging, install that variant instead and adjust the link flags accordingly.
 
 ### Steps
 

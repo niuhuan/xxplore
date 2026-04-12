@@ -23,7 +23,7 @@ enum class MenuCommand {
     PasteRenamed,
     Refresh,
     ViewClipboard,
-    ClearClipboard,
+    PackZip,
     InstallApplications,
     Settings,
     Help,
@@ -49,7 +49,7 @@ struct MainMenuState {
     bool disablePasteRenamed = false;
     bool disableRefresh      = false;
     bool disableViewClip     = false;
-    bool disableClearClip    = false;
+    bool disablePackZip      = false;
     bool disableInstall      = false;
     bool installIsArchive    = false;
     bool disableSettings     = false;

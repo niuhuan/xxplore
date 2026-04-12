@@ -139,7 +139,7 @@ private:
 class ModalOptionList {
 public:
     void open(std::string title, std::string body, std::vector<ModalOptionListEntry> options,
-              int cancelIndex = -1);
+              int cancelIndex = -1, int initialFocus = 0);
     void close();
 
     bool isOpen() const { return active; }

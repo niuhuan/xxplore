@@ -126,11 +126,13 @@ public:
             return ok;
         }
 
-        Chunk chunk;
-        {
+        auto* out = static_cast<unsigned char*>(outBuffer);
+        size_t filled = 0;
+        while (filled < size) {
             std::unique_lock<std::mutex> lock(mutex_);
             cvNotEmpty_.wait(lock, [this]() {
-                return stopRequested_ || !queue_.empty() || producerDone_ || !producerError_.empty();
+                return stopRequested_ || !queue_.empty() || producerDone_ ||
+                       !producerError_.empty();
             });
 
             if (!producerError_.empty()) {
@@ -141,24 +143,24 @@ public:
                 errOut = "prefetch ended unexpectedly";
                 return false;
             }
-            chunk = std::move(queue_.front());
-            queue_.pop_front();
-            cvNotFull_.notify_one();
-        }
 
-        if (!chunk.error.empty()) {
-            errOut = chunk.error;
-            return false;
-        }
-        if (chunk.data.size() != size) {
-            char buf[128];
-            std::snprintf(buf, sizeof(buf), "chunk size mismatch: expected %zu got %zu",
-                          size, chunk.data.size());
-            errOut = buf;
-            return false;
-        }
+            Chunk& chunk = queue_.front();
+            if (!chunk.error.empty()) {
+                errOut = chunk.error;
+                return false;
+            }
 
-        std::memcpy(outBuffer, chunk.data.data(), size);
+            const size_t available = chunk.data.size() - chunk.offset;
+            const size_t take = std::min(available, size - filled);
+            std::memcpy(out + filled, chunk.data.data() + chunk.offset, take);
+            chunk.offset += take;
+            filled += take;
+
+            if (chunk.offset >= chunk.data.size()) {
+                queue_.pop_front();
+                cvNotFull_.notify_one();
+            }
+        }
         return true;
     }
 
@@ -176,6 +178,7 @@ public:
 private:
     struct Chunk {
         std::vector<unsigned char> data;
+        size_t offset = 0;
         std::string error;
     };
 

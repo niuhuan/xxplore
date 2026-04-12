@@ -5,6 +5,7 @@
 #include "ui/panel_chrome.hpp"
 #include "ui/theme.hpp"
 #include "i18n/i18n.hpp"
+#include <algorithm>
 #include <cstdio>
 #include <cstring>
 #include <switch.h>
@@ -634,13 +635,15 @@ void ModalInstallPrompt::render(Renderer& renderer, FontManager& fm, const I18n&
 // ---- ModalOptionList ----
 
 void ModalOptionList::open(std::string t, std::string b, std::vector<ModalOptionListEntry> opts,
-                           int cancelOption) {
+                           int cancelOption, int initialFocus) {
     active = true;
     title = std::move(t);
     body = std::move(b);
     options = std::move(opts);
     cancelIndex = cancelOption;
-    focus = 0;
+    focus = options.empty() ? 0
+                            : std::clamp(initialFocus, 0,
+                                         static_cast<int>(options.size()) - 1);
     if (!options.empty() && !options[focus].enabled)
         moveFocus(1);
 }

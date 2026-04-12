@@ -7,6 +7,7 @@
 #include "fs/usb_drive_manager.hpp"
 #include "fs/usb_mount_provider.hpp"
 #include "fs/webdav_provider.hpp"
+#include "fs/zip_writer.hpp"
 #include "i18n/i18n.hpp"
 #include "swkbd_input.hpp"
 #include "ui/file_list.hpp"
@@ -29,6 +30,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cctype>
 #include <csignal>
 #include <cstdlib>
 #include <cstring>
@@ -558,6 +560,24 @@ enum class ZipExtractConflictChoice {
     MergeAll,
 };
 
+enum class ZipPackActionOption {
+    ExtractOtherPanel = 0,
+    ExtractCurrentFolder,
+    Cancel,
+};
+
+enum class ZipPackConflictOption {
+    Cancel = 0,
+    Rename,
+    Overwrite,
+};
+
+enum class PendingOptionListMode {
+    None,
+    ZipActions,
+    ZipPackActions,
+};
+
 } // namespace
 
 int Application::run(int argc, char* argv[]) {
@@ -692,6 +712,10 @@ int Application::run(int argc, char* argv[]) {
     bool appQuit = false;
     std::vector<InstallQueueItem> pendingInstallItems;
     std::vector<ZipArchiveItem> pendingZipItems;
+    std::vector<fs::ZipWriteSource> pendingZipPackSources;
+    std::string pendingZipPackSourceDir;
+    PendingOptionListMode pendingOptionListMode = PendingOptionListMode::None;
+    uint64_t zipPackTempCounter = 0;
     PendingPanelLoad pendingPanelLoad;
 
     auto activeRef = [&]() -> PanelState& {
@@ -1023,6 +1047,38 @@ int Application::run(int argc, char* argv[]) {
         return result;
     };
 
+    auto buildZipPackSources = [&](PanelState& panel) {
+        std::vector<fs::ZipWriteSource> result;
+        const auto& items = panel.list.getItems();
+        auto addIndex = [&](int index) {
+            if (index < 0 || index >= static_cast<int>(items.size()))
+                return;
+            const ListItem& item = items[index];
+            if (item.label == ".." || item.action == ACTION_GO_UP ||
+                item.action == ACTION_WEBSOCKET_INSTALLER ||
+                item.action == ACTION_FTP_SERVER ||
+                item.action == ACTION_ADD_NETWORK_DRIVE) {
+                return;
+            }
+
+            fs::ZipWriteSource source;
+            source.fullPath = fs::joinPath(panel.path, item.label);
+            source.archiveRootName = item.label;
+            source.isDirectory = item.action == ACTION_ENTER;
+            result.push_back(std::move(source));
+        };
+
+        if (panel.list.hasSelection()) {
+            for (int i = 0; i < static_cast<int>(items.size()); ++i) {
+                if (panel.list.isSelected(i))
+                    addIndex(i);
+            }
+        } else {
+            addIndex(panel.list.getCursor());
+        }
+        return result;
+    };
+
     auto allSelectedInstallPackages = [&](PanelState& panel) -> bool {
         if (!panel.list.hasSelection())
             return false;
@@ -1086,6 +1142,7 @@ int Application::run(int argc, char* argv[]) {
         if (items.empty())
             return;
         pendingZipItems = std::move(items);
+        pendingOptionListMode = PendingOptionListMode::ZipActions;
 
         std::string body;
         if (pendingZipItems.size() == 1) {
@@ -1105,6 +1162,104 @@ int Application::run(int argc, char* argv[]) {
         };
         modalOptionList.open(i18n.t("zip.prompt_title"), body, std::move(options),
                              static_cast<int>(ZipActionOption::Cancel));
+    };
+
+    auto trimTrailingSlash = [](std::string value) {
+        while (value.size() > 1 && value.back() == '/')
+            value.pop_back();
+        return value;
+    };
+
+    auto pathLeafName = [&](const std::string& fullPath) {
+        std::string value = trimTrailingSlash(fullPath);
+        std::size_t slash = value.find_last_of('/');
+        if (slash == std::string::npos)
+            return value;
+        if (slash + 1 >= value.size())
+            return std::string {};
+        return value.substr(slash + 1);
+    };
+
+    auto defaultZipFileName = [&](const std::vector<fs::ZipWriteSource>& sources,
+                                  const std::string& sourceDir) {
+        if (sources.size() == 1) {
+            std::string name = sources.front().archiveRootName;
+            if (!sources.front().isDirectory) {
+                std::size_t dot = name.find_last_of('.');
+                if (dot != std::string::npos && dot > 0)
+                    name = name.substr(0, dot);
+            }
+            return name + ".zip";
+        }
+
+        const std::string normalizedDir = trimTrailingSlash(sourceDir);
+        if (fs::ProviderManager::isVirtualRoot(normalizedDir) ||
+            fs::parentPath(normalizedDir) == "/") {
+            return std::string("Root.zip");
+        }
+
+        std::string name = pathLeafName(normalizedDir);
+        if (name.empty())
+            name = "Root";
+        return name + ".zip";
+    };
+
+    auto normalizeZipFileName = [](std::string value) {
+        if (value.size() < 4) {
+            value += ".zip";
+            return value;
+        }
+
+        const std::string suffix = value.substr(value.size() - 4);
+        const bool hasZipSuffix = std::equal(
+            suffix.begin(), suffix.end(), ".zip",
+            [](char lhs, char rhs) {
+                return std::tolower(static_cast<unsigned char>(lhs)) ==
+                       std::tolower(static_cast<unsigned char>(rhs));
+            });
+        if (!hasZipSuffix)
+            value += ".zip";
+        return value;
+    };
+
+    auto canUseZipPackDestinationPanel = [&](ActivePanel panel) {
+        PanelState& target = panelFor(panel);
+        if (fs::ProviderManager::isVirtualRoot(target.path) || fs::isZipBrowsePath(target.path))
+            return false;
+        if (!provMgr.pathAllowsSelection(target.path))
+            return false;
+        std::string relPath;
+        fs::FileProvider* provider = provMgr.resolveProvider(target.path, relPath);
+        return provider && !provider->isReadOnly();
+    };
+
+    auto openZipPackPrompt = [&](std::vector<fs::ZipWriteSource> sources,
+                                 const std::string& sourceDir) {
+        if (sources.empty())
+            return;
+
+        pendingZipPackSources = std::move(sources);
+        pendingZipPackSourceDir = sourceDir;
+        pendingOptionListMode = PendingOptionListMode::ZipPackActions;
+
+        std::string body;
+        if (pendingZipPackSources.size() == 1) {
+            body = pendingZipPackSources.front().archiveRootName;
+        } else {
+            body = std::to_string(pendingZipPackSources.size());
+            body += i18n.t("zip.pack_prompt_multi_suffix");
+        }
+
+        std::vector<ModalOptionListEntry> options = {
+            {i18n.t("zip.pack_action_other_panel"),
+             canUseZipPackDestinationPanel(activePanel == PANEL_LEFT ? PANEL_RIGHT : PANEL_LEFT)},
+            {i18n.t("zip.pack_action_current_folder"),
+             canUseZipPackDestinationPanel(activePanel)},
+            {i18n.t("modal.cancel"), true},
+        };
+        modalOptionList.open(i18n.t("zip.pack_prompt_title"), body, std::move(options),
+                             static_cast<int>(ZipPackActionOption::Cancel),
+                             static_cast<int>(ZipPackActionOption::Cancel));
     };
 
     auto startInstaller = [&](std::vector<InstallQueueItem> items) {
@@ -1240,7 +1395,7 @@ int Application::run(int argc, char* argv[]) {
             st.disableDelete = true;
             st.disableCopy = st.disableCut = st.disablePaste = true;
             st.disablePasteRenamed = true;
-            st.disableViewClip = st.disableClearClip = st.disableInstall = true;
+            st.disableViewClip = st.disablePackZip = st.disableInstall = true;
             st.disableRefresh = false;
             st.disableSettings = st.disableHelp = st.disableAbout = st.disableExit = false;
 
@@ -1269,7 +1424,7 @@ int Application::run(int argc, char* argv[]) {
             st.disableRename = st.disableNewFolder = st.disableDelete = true;
             st.disableCopy = st.disableCut = st.disablePaste = true;
             st.disablePasteRenamed = true;
-            st.disableViewClip = st.disableClearClip = st.disableInstall = true;
+            st.disableViewClip = st.disablePackZip = st.disableInstall = true;
             st.disableRefresh = false;
             st.disableSettings = st.disableHelp = st.disableAbout = st.disableExit = false;
             char ctxBuf[256];
@@ -1317,7 +1472,7 @@ int Application::run(int argc, char* argv[]) {
         st.disablePasteRenamed = pasteDis || !canRenamePaste;
         st.disableRefresh = false;
         st.disableViewClip  = clipEmpty;
-        st.disableClearClip = clipEmpty;
+        st.disablePackZip = readOnly || zipBrowsePath || !hasTarget;
         const std::vector<ZipArchiveItem> zipItems = zipItemsForMenu(a);
         st.installIsArchive = !zipItems.empty();
         st.disableInstall = st.installIsArchive ? zipItems.empty() : installItemsForMenu(a).empty();
@@ -1971,6 +2126,223 @@ int Application::run(int argc, char* argv[]) {
         }
     };
 
+    auto zipPackDestinationAllowed = [&](const std::vector<fs::ZipWriteSource>& sources,
+                                         const std::string& destFullPath) {
+        for (const auto& source : sources) {
+            if (destFullPath == source.fullPath)
+                return false;
+            if (source.isDirectory && isSameOrUnderPath(source.fullPath, destFullPath))
+                return false;
+        }
+        return true;
+    };
+
+    auto promptZipPackConflict = [&](const std::string& archiveName) -> ZipPackConflictOption {
+        std::vector<ModalOptionListEntry> options = {
+            {i18n.t("zip.pack_conflict_cancel"), true},
+            {i18n.t("zip.pack_conflict_rename"), true},
+            {i18n.t("zip.pack_conflict_overwrite"), true},
+        };
+        std::string body = archiveName;
+        body += "\n";
+        body += i18n.t("zip.pack_conflict_exists");
+        modalOptionList.open(i18n.t("zip.pack_conflict_title"), body, std::move(options),
+                             static_cast<int>(ZipPackConflictOption::Cancel),
+                             static_cast<int>(ZipPackConflictOption::Cancel));
+        for (;;) {
+            padUpdate(&pad);
+            u64 k = padGetButtonsDown(&pad);
+            HidTouchScreenState touchState {};
+            hidGetTouchScreenStates(&touchState, 1);
+            TouchTap tap;
+            if (touchState.count > 0 && !touchWasDown) {
+                tap.active = true;
+                tap.x = static_cast<int>(touchState.touches[0].x);
+                tap.y = static_cast<int>(touchState.touches[0].y);
+            }
+            touchWasDown = touchState.count > 0;
+
+            int option = modalOptionList.handleInput(k, &tap);
+            renderScene();
+            int scrimH = theme::HEADER_H + theme::PANEL_CONTENT_H;
+            renderer.drawRectFilled(0, 0, theme::SCREEN_W, scrimH, theme::MENU_SCRIM_CONTENT);
+            renderFooter(renderer, fontManager, i18n, appConfig.touchButtonsEnabled);
+            modalOptionList.render(renderer, fontManager);
+            renderer.present();
+
+            if (option >= 0) {
+                modalOptionList.close();
+                return static_cast<ZipPackConflictOption>(option);
+            }
+            SDL_Delay(16);
+        }
+    };
+
+    auto createZipPackTempPath = [&](std::string& errOut) {
+        static const char* kDirs[] = {
+            "sdmc:/tmp",
+            "sdmc:/tmp/xxplore",
+            "sdmc:/tmp/xxplore/zip-pack",
+        };
+
+        errOut.clear();
+        for (const char* dir : kDirs) {
+            if (provMgr.pathExists(dir))
+                continue;
+            if (!provMgr.createDirectory(dir, errOut) && !provMgr.pathExists(dir))
+                return std::string {};
+        }
+
+        for (int attempt = 0; attempt < 1024; ++attempt) {
+            char pathBuf[192];
+            std::snprintf(pathBuf, sizeof(pathBuf), "sdmc:/tmp/xxplore/zip-pack/%llu-%llu.zip",
+                          static_cast<unsigned long long>(SDL_GetTicks()),
+                          static_cast<unsigned long long>(zipPackTempCounter++));
+            if (!provMgr.pathExists(pathBuf))
+                return std::string(pathBuf);
+        }
+
+        errOut = "failed to allocate temporary zip path";
+        return std::string {};
+    };
+
+    auto runZipPack = [&](const std::vector<fs::ZipWriteSource>& sources,
+                          const std::string& sourceDir, ActivePanel destinationPanel) {
+        if (sources.empty())
+            return;
+
+        PanelState& dstPanel = panelFor(destinationPanel);
+        const std::string destDir = dstPanel.path;
+        const int keepCursor = dstPanel.list.getCursor();
+
+        std::string requestedName = defaultZipFileName(sources, sourceDir);
+        std::string destFullPath;
+        for (;;) {
+            char nameBuf[256] = {0};
+            if (!swkbdTextInput(i18n.t("swkbd.pack_zip_title"),
+                                i18n.t("swkbd.pack_zip_guide"),
+                                requestedName.c_str(), nameBuf, sizeof(nameBuf))) {
+                return;
+            }
+
+            requestedName = normalizeZipFileName(nameBuf);
+            if (!fs::isValidEnglishFileName(requestedName)) {
+                toast.show(i18n.t("error.invalid_name"), "", ToastKind::Warning, 3000);
+                continue;
+            }
+
+            destFullPath = fs::joinPath(destDir, requestedName);
+            if (!zipPackDestinationAllowed(sources, destFullPath)) {
+                toast.show(i18n.t("error.operation_failed"), i18n.t("error.pack_target_invalid"),
+                           ToastKind::Warning, 3200);
+                continue;
+            }
+
+            if (!provMgr.pathExists(destFullPath))
+                break;
+
+            ZipPackConflictOption choice = promptZipPackConflict(requestedName);
+            if (choice == ZipPackConflictOption::Cancel)
+                return;
+            if (choice == ZipPackConflictOption::Rename)
+                continue;
+
+            std::string removeErr;
+            if (!provMgr.removeAll(destFullPath, removeErr)) {
+                toast.show(i18n.t("error.operation_failed"), removeErr.c_str(),
+                           ToastKind::Error, 3200);
+                return;
+            }
+            break;
+        }
+
+        std::string destRelPath;
+        fs::FileProvider* destProvider = provMgr.resolveProvider(destFullPath, destRelPath);
+        if (!destProvider || destProvider->isReadOnly()) {
+            toast.show(i18n.t("error.operation_failed"), i18n.t("error.pack_destination_unavailable"),
+                       ToastKind::Error, 3200);
+            return;
+        }
+
+        bool useTempFile = !destProvider->supportsPartialWrite();
+        std::string tempZipPath;
+        std::string archiveOutputPath = destFullPath;
+        if (useTempFile) {
+            std::string tempErr;
+            tempZipPath = createZipPackTempPath(tempErr);
+            if (tempZipPath.empty()) {
+                toast.show(i18n.t("error.operation_failed"), tempErr.c_str(),
+                           ToastKind::Error, 3200);
+                return;
+            }
+            archiveOutputPath = tempZipPath;
+        }
+
+        interrupted = false;
+        modalProgress.open(i18n.t("zip.progress_packing"), "");
+        util::acquireScreenAwake();
+
+        std::string err;
+        bool packed = fs::createZipArchive(
+            provMgr, archiveOutputPath, sources, err,
+            [&](const fs::ZipWriteProgress& progress) {
+                modalProgress.setDetail(progress.currentPath);
+                modalProgress.setProgress(progress.overallBytes,
+                                          progress.overallTotalBytes == 0 ? 1
+                                                                          : progress.overallTotalBytes);
+                return pumpProgress();
+            });
+
+        bool uploadRan = false;
+        fs::TransferResult uploadResult;
+        if (packed && useTempFile) {
+            uploadRan = true;
+            uploadResult = provMgr.transferEntries(
+                {{tempZipPath, destFullPath}}, fs::TransferOperation::Copy,
+                fs::TransferStrategy::Simple,
+                makeTransferCallbacks(fs::TransferOperation::Copy));
+        }
+
+        util::releaseScreenAwake();
+        modalProgress.close();
+        activeRef().list.clearSelection();
+
+        std::string cleanupErr;
+        if (!packed) {
+            provMgr.removeAll(archiveOutputPath, cleanupErr);
+            refreshPath(destDir, keepCursor);
+            if (err == "interrupted")
+                toast.show(i18n.t("toast.interrupted"), "", ToastKind::Warning, 4000);
+            else
+                toast.show(i18n.t("error.operation_failed"), err.c_str(), ToastKind::Error, 3200);
+            return;
+        }
+
+        if (useTempFile)
+            provMgr.removeAll(tempZipPath, cleanupErr);
+
+        if (uploadRan) {
+            if (uploadResult.interrupted) {
+                provMgr.removeAll(destFullPath, cleanupErr);
+                refreshPath(destDir, keepCursor);
+                toast.show(i18n.t("toast.interrupted"), "", ToastKind::Warning, 4000);
+                return;
+            }
+            if (uploadResult.aborted || uploadResult.ignoredErrors) {
+                provMgr.removeAll(destFullPath, cleanupErr);
+                refreshPath(destDir, keepCursor);
+                const char* detail = uploadResult.lastError.empty()
+                    ? i18n.t("error.pack_upload_failed")
+                    : uploadResult.lastError.c_str();
+                toast.show(i18n.t("error.operation_failed"), detail, ToastKind::Error, 3200);
+                return;
+            }
+        }
+
+        refreshPath(destDir, keepCursor);
+        toast.show(i18n.t("zip.toast_pack_ok"), "", ToastKind::Success, 2200);
+    };
+
     while (appletMainLoop()) {
         uint32_t now   = SDL_GetTicks();
         uint32_t delta = now - lastTick;
@@ -2052,44 +2424,72 @@ int Application::run(int argc, char* argv[]) {
                 break;
 
             modalOptionList.close();
-            std::vector<ZipArchiveItem> zipItems = pendingZipItems;
-            pendingZipItems.clear();
-            if (zipItems.empty())
-                break;
+            PendingOptionListMode optionListMode = pendingOptionListMode;
+            pendingOptionListMode = PendingOptionListMode::None;
 
-            switch (static_cast<ZipActionOption>(option)) {
-            case ZipActionOption::Browse: {
-                if (zipItems.size() != 1)
+            if (optionListMode == PendingOptionListMode::ZipActions) {
+                std::vector<ZipArchiveItem> zipItems = pendingZipItems;
+                pendingZipItems.clear();
+                if (zipItems.empty())
                     break;
-                std::string mountedRootPath;
-                std::string err;
-                if (!provMgr.mountZipArchive(zipItems.front().path, appletMode,
-                                             mountedRootPath, err)) {
-                    toast.show(i18n.t("error.operation_failed"), err.c_str(),
-                               ToastKind::Error, 3200);
+
+                switch (static_cast<ZipActionOption>(option)) {
+                case ZipActionOption::Browse: {
+                    if (zipItems.size() != 1)
+                        break;
+                    std::string mountedRootPath;
+                    std::string err;
+                    if (!provMgr.mountZipArchive(zipItems.front().path, appletMode,
+                                                 mountedRootPath, err)) {
+                        toast.show(i18n.t("error.operation_failed"), err.c_str(),
+                                   ToastKind::Error, 3200);
+                        break;
+                    }
+                    activeList.clearSelection();
+                    navigateToPath(activePanel, mountedRootPath);
                     break;
                 }
-                activeList.clearSelection();
-                navigateToPath(activePanel, mountedRootPath);
+                case ZipActionOption::Test:
+                    testZipArchives(zipItems);
+                    break;
+                case ZipActionOption::ExtractHere:
+                    extractZipArchives(zipItems, activePanel, false);
+                    break;
+                case ZipActionOption::ExtractNamedFolder:
+                    extractZipArchives(zipItems, activePanel, true);
+                    break;
+                case ZipActionOption::ExtractOtherPanel:
+                    extractZipArchives(zipItems,
+                                       activePanel == PANEL_LEFT ? PANEL_RIGHT : PANEL_LEFT,
+                                       false);
+                    break;
+                case ZipActionOption::Cancel:
+                default:
+                    break;
+                }
                 break;
             }
-            case ZipActionOption::Test:
-                testZipArchives(zipItems);
-                break;
-            case ZipActionOption::ExtractHere:
-                extractZipArchives(zipItems, activePanel, false);
-                break;
-            case ZipActionOption::ExtractNamedFolder:
-                extractZipArchives(zipItems, activePanel, true);
-                break;
-            case ZipActionOption::ExtractOtherPanel:
-                extractZipArchives(zipItems,
-                                   activePanel == PANEL_LEFT ? PANEL_RIGHT : PANEL_LEFT,
-                                   false);
-                break;
-            case ZipActionOption::Cancel:
-            default:
-                break;
+
+            if (optionListMode == PendingOptionListMode::ZipPackActions) {
+                std::vector<fs::ZipWriteSource> packSources = pendingZipPackSources;
+                std::string packSourceDir = pendingZipPackSourceDir;
+                pendingZipPackSources.clear();
+                pendingZipPackSourceDir.clear();
+                if (packSources.empty())
+                    break;
+
+                switch (static_cast<ZipPackActionOption>(option)) {
+                case ZipPackActionOption::ExtractOtherPanel:
+                    runZipPack(packSources, packSourceDir,
+                               activePanel == PANEL_LEFT ? PANEL_RIGHT : PANEL_LEFT);
+                    break;
+                case ZipPackActionOption::ExtractCurrentFolder:
+                    runZipPack(packSources, packSourceDir, activePanel);
+                    break;
+                case ZipPackActionOption::Cancel:
+                default:
+                    break;
+                }
             }
             break;
         }
@@ -2643,11 +3043,12 @@ int Application::run(int argc, char* argv[]) {
                 mainMenu.close();
                 break;
             }
-            case MenuCommand::ClearClipboard:
-                clipboard.clear();
-                toast.show(i18n.t("toast.clipboard_cleared"), "", ToastKind::Info, 2000);
+            case MenuCommand::PackZip: {
+                std::vector<fs::ZipWriteSource> packSources = buildZipPackSources(active);
                 mainMenu.close();
+                openZipPackPrompt(std::move(packSources), active.path);
                 break;
+            }
             case MenuCommand::InstallApplications: {
                 std::vector<ZipArchiveItem> zipItems = zipItemsForMenu(active);
                 if (!zipItems.empty()) {
