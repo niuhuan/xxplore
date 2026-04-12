@@ -651,6 +651,19 @@ int Application::run(int argc, char* argv[]) {
         }
         if (prov) provMgr.registerProvider(prov);
     }
+
+    {
+        const char* zipPackTempDir = "sdmc:/tmp/xxplore/zip-pack";
+        if (provMgr.pathExists(zipPackTempDir)) {
+            std::string cleanupErr;
+            if (!provMgr.removeAll(zipPackTempDir, cleanupErr)) {
+#ifdef XXPLORE_DEBUG
+                std::printf("zip-pack cleanup skipped (%s)\n", cleanupErr.c_str());
+#endif
+            }
+        }
+    }
+
     fs::UsbDriveManager usbDriveManager;
     std::vector<fs::UsbDriveInfo> usbDrives;
     {
