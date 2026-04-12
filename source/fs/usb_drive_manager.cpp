@@ -3,15 +3,28 @@
 #include <usbhsfs.h>
 #include <cstdio>
 #include <cstring>
+#include <sys/stat.h>
+#include <unistd.h>
 
 namespace xxplore::fs {
 
 namespace {
 
+constexpr const char* USB_DEBUG_LOG_PATH = "sdmc:/libusbhsfs.log";
+
 std::string formatUsbResult(const char* what, Result rc) {
     char buf[64];
     std::snprintf(buf, sizeof(buf), "%s failed: 0x%X", what, static_cast<unsigned>(rc));
     return std::string(buf);
+}
+
+void cleanupUsbDebugLogIfNeeded() {
+    struct stat st {};
+    if (::stat(USB_DEBUG_LOG_PATH, &st) != 0)
+        return;
+    if (st.st_size <= 0)
+        return;
+    ::unlink(USB_DEBUG_LOG_PATH);
 }
 
 } // namespace
@@ -33,6 +46,8 @@ std::string UsbDriveManager::providerIdForMountName(const std::string& mountName
 bool UsbDriveManager::init(std::string& errOut) {
     if (running_)
         return true;
+
+    cleanupUsbDebugLogIfNeeded();
 
     Result rc = usbHsFsInitialize(0);
     if (R_FAILED(rc)) {

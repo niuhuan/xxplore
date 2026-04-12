@@ -122,7 +122,21 @@ According to the upstream project, `libusbhsfs` supports two build modes:
 - `BUILD_TYPE=ISC`: FAT-only support.
 - `BUILD_TYPE=GPL`: FAT + NTFS-3G + lwext4 support, under GPLv2 or later.
 
-Xxplore's current `Makefile` links `-lusbhsfs -lntfs-3g -llwext4`, so the expected setup is the **GPL build**.
+Xxplore currently uses the **GPL debug variant** `-lusbhsfsd -lntfs-3g -llwext4`.
+
+This is a temporary workaround:
+
+- On the tested setup, the upstream release library `-lusbhsfs` sometimes failed to enumerate USB devices correctly.
+- The upstream debug library `-lusbhsfsd` behaved correctly, so Xxplore temporarily stays on the debug variant for USB stability.
+- However, the upstream debug build also enables very noisy file logging and filesystem-driver logging, which adds unnecessary I/O and writes `sdmc:/libusbhsfs.log`.
+
+Because of that, the current recommendation is a **silent debug build** of `libusbhsfs`:
+
+- keep the runtime behavior of `libusbhsfsd`
+- disable `USBHSFS_LOG_*` file logging
+- keep NTFS-3G and lwext4 logging disabled
+
+This is separate from Xxplore's own `XXPLORE_DEBUG` macro.
 
 Install the required filesystem portlibs first, then build and install `libusbhsfs`:
 
@@ -138,13 +152,15 @@ cd libusbhsfs
 make BUILD_TYPE=GPL install
 ```
 
-If you want the upstream debug build with logging, install that variant instead and adjust the link flags accordingly.
+If you are following Xxplore's current setup, install your patched silent `libusbhsfsd.a` instead of the noisy upstream debug build.
 
 ### Debug Mode
 
 ```bash
 make DEFINES=-DXXPLORE_DEBUG
 ```
+
+`XXPLORE_DEBUG` controls Xxplore's own debug code only. It is not the same thing as the temporary silent `libusbhsfsd` workaround described above.
 
 ## License
 

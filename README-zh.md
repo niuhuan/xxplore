@@ -85,7 +85,21 @@ Xxplore 使用 [libusbhsfs](https://github.com/DarkMatterCore/libusbhsfs) 实现
 - `BUILD_TYPE=ISC`：仅支持 FAT。
 - `BUILD_TYPE=GPL`：支持 FAT + NTFS-3G + lwext4，许可证为 GPLv2 或更新版本。
 
-Xxplore 当前的 `Makefile` 会链接 `-lusbhsfs -lntfs-3g -llwext4`，因此这里要求使用 **GPL 构建**。
+Xxplore 当前临时使用 **GPL debug 变体** `-lusbhsfsd -lntfs-3g -llwext4`。
+
+这是一个临时性的兼容方案：
+
+- 在当前测试环境里，上游 release 版 `-lusbhsfs` 有时无法稳定枚举 USB 设备。
+- 上游 debug 版 `-lusbhsfsd` 的行为正常，所以目前先用 debug 变体保证 USB 挂载稳定。
+- 但上游 debug 版同时会打开非常吵的文件日志和文件系统驱动日志，带来额外 I/O，并写出 `sdmc:/libusbhsfs.log`。
+
+因此，当前推荐的是 **静默 debug 版** `libusbhsfs`：
+
+- 保留 `libusbhsfsd` 的运行时行为
+- 禁用 `USBHSFS_LOG_*` 文件日志
+- 保持 NTFS-3G 和 lwext4 日志关闭
+
+这和 Xxplore 自己的 `XXPLORE_DEBUG` 宏不是一回事。
 
 请先安装所需的文件系统 portlibs，再编译并安装 `libusbhsfs`：
 
@@ -101,7 +115,7 @@ cd libusbhsfs
 make BUILD_TYPE=GPL install
 ```
 
-如果你要使用上游自带日志的 debug 版，请改为安装对应变体，并同步调整链接参数。
+如果你按 Xxplore 当前方案使用，请安装已经去掉日志输出的静默 `libusbhsfsd.a`，而不是直接使用上游自带日志的 debug 版。
 
 ### 步骤
 
@@ -146,6 +160,8 @@ sdmc:/switch/xxplore/xxplore.ttf
 ```bash
 make DEFINES=-DXXPLORE_DEBUG
 ```
+
+`XXPLORE_DEBUG` 只控制 Xxplore 自己的调试代码，不等同于上面提到的临时静默 `libusbhsfsd` 方案。
 
 ## 协议
 

@@ -51,10 +51,12 @@ LIBS	+=	`$(PREFIX)pkg-config --libs libcurl` -lmbedtls -lmbedx509 -lmbedcrypto
 
 LIBS	+=	-lsmb2
 #ifeq ($(findstring -DXXPLORE_DEBUG,$(DEFINES)),-DXXPLORE_DEBUG)
-#LIBS	+=	-lusbhsfsd
+LIBS	+=	-lusbhsfsd
 #else
-LIBS	+=	-lusbhsfs
+#LIBS	+=	-lusbhsfs
 #endif
+#LIBS    +=      $(TOPDIR)/tmp/libusbhsfs/lib/libusbhsfsd.a
+
 LIBS	+=	-lntfs-3g -llwext4
 LIBS	+=	-lnx
 
