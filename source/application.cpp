@@ -2419,12 +2419,12 @@ int Application::run(int argc, char* argv[]) {
             inputLayer = InputLayer::SettingsScreen;
         else if (installerScreen.isOpen())
             inputLayer = InputLayer::InstallerScreen;
+        else if (modalOptionList.isOpen())
+            inputLayer = InputLayer::ModalOptionList;
         else if (textEditorScreen.isOpen())
             inputLayer = InputLayer::TextEditorScreen;
         else if (imageViewer.isOpen())
             inputLayer = InputLayer::ImageViewer;
-        else if (modalOptionList.isOpen())
-            inputLayer = InputLayer::ModalOptionList;
         else if (modalInstallPrompt.isOpen())
             inputLayer = InputLayer::ModalInstallPrompt;
         else if (modalInfo.isOpen())
@@ -2641,6 +2641,7 @@ int Application::run(int argc, char* argv[]) {
                     break;
                 case TextEditorMenuAction::InsertBefore:
                 case TextEditorMenuAction::InsertAfter:
+                case TextEditorMenuAction::DeleteLines:
                     break;
                 case TextEditorMenuAction::ViewClipboard:
                 case TextEditorMenuAction::Cancel:

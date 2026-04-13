@@ -336,7 +336,15 @@ bool isInstallPackagePath(const std::string& path) {
 
 bool isTextEditorPath(const std::string& path) {
     const std::string ext = pathExtensionLower(path);
-    return ext == ".txt" || ext == ".md";
+    return ext == ".txt" || ext == ".md" || ext == ".log" || ext == ".ini" ||
+           ext == ".cfg" || ext == ".conf" || ext == ".yaml" || ext == ".yml" ||
+           ext == ".json" || ext == ".xml" || ext == ".toml" || ext == ".csv" ||
+           ext == ".tsv" || ext == ".rtf" || ext == ".html" || ext == ".htm" ||
+           ext == ".css" || ext == ".js" || ext == ".ts" || ext == ".jsx" ||
+           ext == ".tsx" || ext == ".py" || ext == ".sh" || ext == ".bat" ||
+           ext == ".ps1" || ext == ".c" || ext == ".cc" || ext == ".cpp" ||
+           ext == ".h" || ext == ".hh" || ext == ".hpp" || ext == ".java" ||
+           ext == ".kt" || ext == ".rs" || ext == ".go" || ext == ".sql";
 }
 
 bool isZipFilePath(const std::string& path) {

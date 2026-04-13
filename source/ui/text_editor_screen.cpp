@@ -596,6 +596,29 @@ bool TextEditorScreen::findPreviousLineStart(uint64_t currentLineStartByte,
         return false;
 
     uint64_t scanEnd = currentLineStartByte;
+
+    unsigned char trailingByte = 0;
+    if (!provMgr_->readFile(path_, scanEnd - 1, 1, &trailingByte, errOut))
+        return false;
+
+    if (trailingByte == '\n') {
+        --scanEnd;
+        if (scanEnd > contentStartByte_) {
+            unsigned char maybeCr = 0;
+            if (!provMgr_->readFile(path_, scanEnd - 1, 1, &maybeCr, errOut))
+                return false;
+            if (maybeCr == '\r')
+                --scanEnd;
+        }
+    } else if (trailingByte == '\r') {
+        --scanEnd;
+    }
+
+    if (scanEnd <= contentStartByte_) {
+        outPrevLineStartByte = contentStartByte_;
+        return true;
+    }
+
     while (scanEnd > contentStartByte_) {
         const uint64_t chunkStart =
             (scanEnd > static_cast<uint64_t>(kScanChunkSize))
@@ -609,7 +632,23 @@ bool TextEditorScreen::findPreviousLineStart(uint64_t currentLineStartByte,
         for (std::size_t i = chunkSize; i > 0; --i) {
             const unsigned char ch = chunk[i - 1];
             if (ch == '\n' || ch == '\r') {
-                outPrevLineStartByte = chunkStart + static_cast<uint64_t>(i);
+                const uint64_t newlineOffset = chunkStart + static_cast<uint64_t>(i - 1);
+                if (ch == '\r') {
+                    bool hasFollowingLf = false;
+                    if (newlineOffset + 1 < scanEnd) {
+                        unsigned char nextByte = 0;
+                        if (i < chunkSize) {
+                            nextByte = chunk[i];
+                        } else if (!provMgr_->readFile(path_, newlineOffset + 1, 1, &nextByte,
+                                                       errOut)) {
+                            return false;
+                        }
+                        hasFollowingLf = nextByte == '\n';
+                    }
+                    if (hasFollowingLf)
+                        continue;
+                }
+                outPrevLineStartByte = newlineOffset + 1;
                 return true;
             }
         }
@@ -706,6 +745,20 @@ bool TextEditorScreen::lineSelected(uint64_t lineNumber) const {
     return lineNumber >= selection_.startLine && lineNumber <= selection_.endLine;
 }
 
+bool TextEditorScreen::selectionCoversAllLines() const {
+    if (!selection_.active)
+        return false;
+    return selection_.startByte <= contentStartByte_ && selection_.endByte >= fileSize_;
+}
+
+bool TextEditorScreen::currentLineIsOnlyLineWithoutNewline() const {
+    const LineView* line = currentLine();
+    if (!line)
+        return false;
+    return line->lineStartByte <= contentStartByte_ && line->endByteExclusive() >= fileSize_ &&
+           line->newlineByteLength == 0;
+}
+
 void TextEditorScreen::toggleSelectCurrentLine() {
     const LineView* line = currentLine();
     if (!line)
@@ -788,6 +841,10 @@ TextEditorAction TextEditorScreen::handleInput(uint64_t kDown, const TouchTap* t
         std::string err;
         if (!moveCursorDown(err))
             pendingError_ = std::move(err);
+        return TextEditorAction::None;
+    }
+    if (kDown & HidNpadButton_X) {
+        selection_.clear();
         return TextEditorAction::None;
     }
     if (kDown & HidNpadButton_AnyUp) {
@@ -887,9 +944,10 @@ void TextEditorScreen::render(Renderer& renderer, FontManager& fm, const I18n& i
         {"A", i18n.t("text_editor.footer_edit")},
         {"B", i18n.t("text_editor.footer_close")},
         {"Y", i18n.t("text_editor.footer_select")},
+        {"X", i18n.t("text_editor.footer_clear_selection")},
         {"+", i18n.t("text_editor.footer_menu")},
     };
-    constexpr int tipCount = 4;
+    constexpr int tipCount = 5;
     int totalWidth = 0;
     for (int i = 0; i < tipCount; ++i) {
         const auto& tip = tips[i];
@@ -972,6 +1030,9 @@ std::vector<ModalOptionListEntry> TextEditorScreen::buildMenuOptions(const I18n&
         {i18n.t("text_editor.menu_view_clipboard"), hasClipboard},
         {i18n.t("text_editor.menu_insert_before"), canModify},
         {i18n.t("text_editor.menu_insert_after"), canModify},
+        {i18n.t(selection_.active ? "text_editor.menu_delete_selected"
+                                  : "text_editor.menu_delete_current"),
+         canModify},
         {i18n.t("modal.cancel"), true},
     };
 }
@@ -1163,8 +1224,12 @@ bool TextEditorScreen::rewriteFile(const std::vector<RewriteSegment>& segments, 
     if (!loadPage(loadAnchorByte, anchorLineNumber, preferredCursor, true, errOut)) {
         uint64_t fallbackByte = std::min<uint64_t>(pageStartByte_, fileSize_);
         uint64_t fallbackLine = pageStartLineNumber_;
-        if (fallbackByte == fileSize_ && fileSize_ > contentStartByte_ && !fileEndsWithNewline_)
+        if (fallbackByte == fileSize_ && fileSize_ > contentStartByte_ && !fileEndsWithNewline_) {
             fallbackByte = contentStartByte_;
+            fallbackLine = 0;
+        }
+        if (fallbackByte <= contentStartByte_)
+            fallbackLine = 0;
         if (!loadPage(fallbackByte, fallbackLine, 0, true, errOut))
             return false;
     }
@@ -1199,7 +1264,11 @@ bool TextEditorScreen::cutSelection(std::string& errOut) {
     if (endByte < fileSize_)
         segments.push_back({RewriteSegment::Kind::SourceRange, endByte, fileSize_ - endByte, {}});
 
-    return rewriteFile(segments, startByte, startLine, 0, errOut);
+    const bool preservePageAnchor = startByte > pageStartByte_;
+    const uint64_t anchorByte = preservePageAnchor ? pageStartByte_ : startByte;
+    const uint64_t anchorLine = preservePageAnchor ? pageStartLineNumber_ : startLine;
+    const int preferredCursor = preservePageAnchor ? cursorIndex_ : 0;
+    return rewriteFile(segments, anchorByte, anchorLine, preferredCursor, errOut);
 }
 
 bool TextEditorScreen::pasteBeforeCurrentLine(std::string& errOut) {
@@ -1218,7 +1287,11 @@ bool TextEditorScreen::pasteBeforeCurrentLine(std::string& errOut) {
         segments.push_back({RewriteSegment::Kind::SourceRange, line->lineStartByte,
                             fileSize_ - line->lineStartByte, {}});
     }
-    return rewriteFile(segments, line->lineStartByte, line->lineNumber, cursorIndex_, errOut);
+    const bool preservePageAnchor = line->lineStartByte > pageStartByte_;
+    const uint64_t anchorByte = preservePageAnchor ? pageStartByte_ : line->lineStartByte;
+    const uint64_t anchorLine = preservePageAnchor ? pageStartLineNumber_ : line->lineNumber;
+    const int preferredCursor = preservePageAnchor ? cursorIndex_ : 0;
+    return rewriteFile(segments, anchorByte, anchorLine, preferredCursor, errOut);
 }
 
 bool TextEditorScreen::pasteAfterCurrentLine(std::string& errOut) {
@@ -1259,7 +1332,11 @@ bool TextEditorScreen::insertEmptyLineBefore(std::string& errOut) {
         segments.push_back({RewriteSegment::Kind::SourceRange, line->lineStartByte,
                             fileSize_ - line->lineStartByte, {}});
 
-    return rewriteFile(segments, line->lineStartByte, line->lineNumber, cursorIndex_, errOut);
+    const bool preservePageAnchor = line->lineStartByte > pageStartByte_;
+    const uint64_t anchorByte = preservePageAnchor ? pageStartByte_ : line->lineStartByte;
+    const uint64_t anchorLine = preservePageAnchor ? pageStartLineNumber_ : line->lineNumber;
+    const int preferredCursor = preservePageAnchor ? cursorIndex_ : 0;
+    return rewriteFile(segments, anchorByte, anchorLine, preferredCursor, errOut);
 }
 
 bool TextEditorScreen::insertEmptyLineAfter(std::string& errOut) {
@@ -1279,6 +1356,53 @@ bool TextEditorScreen::insertEmptyLineAfter(std::string& errOut) {
                             fileSize_ - insertOffset, {}});
 
     return rewriteFile(segments, pageStartByte_, pageStartLineNumber_, cursorIndex_, errOut);
+}
+
+bool TextEditorScreen::deleteSelectedOrCurrentLines(std::string& errOut) {
+    if (readOnly_) {
+        errOut = "read_only";
+        return false;
+    }
+
+    uint64_t startByte = 0;
+    uint64_t endByte = 0;
+    uint64_t startLine = 0;
+    bool clearContent = false;
+
+    if (selection_.active) {
+        startByte = selection_.startByte;
+        endByte = selection_.endByte;
+        startLine = selection_.startLine;
+        clearContent = selectionCoversAllLines();
+    } else {
+        const LineView* line = currentLine();
+        if (!line) {
+            errOut = "missing line";
+            return false;
+        }
+        startByte = line->lineStartByte;
+        endByte = line->endByteExclusive();
+        startLine = line->lineNumber;
+        clearContent = currentLineIsOnlyLineWithoutNewline();
+    }
+
+    std::vector<RewriteSegment> segments;
+    if (clearContent) {
+        if (contentStartByte_ > 0)
+            segments.push_back({RewriteSegment::Kind::SourceRange, 0, contentStartByte_, {}});
+        return rewriteFile(segments, contentStartByte_, 0, 0, errOut);
+    }
+
+    if (startByte > 0)
+        segments.push_back({RewriteSegment::Kind::SourceRange, 0, startByte, {}});
+    if (endByte < fileSize_)
+        segments.push_back({RewriteSegment::Kind::SourceRange, endByte, fileSize_ - endByte, {}});
+
+    const bool preservePageAnchor = startByte > pageStartByte_;
+    const uint64_t anchorByte = preservePageAnchor ? pageStartByte_ : startByte;
+    const uint64_t anchorLine = preservePageAnchor ? pageStartLineNumber_ : startLine;
+    const int preferredCursor = preservePageAnchor ? cursorIndex_ : 0;
+    return rewriteFile(segments, anchorByte, anchorLine, preferredCursor, errOut);
 }
 
 bool TextEditorScreen::runMenuAction(TextEditorMenuAction action, bool& openClipboard,
@@ -1321,6 +1445,12 @@ bool TextEditorScreen::runMenuAction(TextEditorMenuAction action, bool& openClip
             return false;
         }
         return insertEmptyLineAfter(errOut);
+    case TextEditorMenuAction::DeleteLines:
+        if (readOnly_) {
+            errOut = "read_only";
+            return false;
+        }
+        return deleteSelectedOrCurrentLines(errOut);
     case TextEditorMenuAction::Cancel:
     default:
         return true;

@@ -33,6 +33,7 @@ enum class TextEditorMenuAction {
     ViewClipboard,
     InsertBefore,
     InsertAfter,
+    DeleteLines,
     Cancel,
 };
 
@@ -124,6 +125,10 @@ private:
     bool findPreviousPageAnchor(PageAnchor& outAnchor, std::string& errOut) const;
     void toggleSelectCurrentLine();
     bool lineSelected(uint64_t lineNumber) const;
+    bool hasSelection() const { return selection_.active; }
+    bool selectionCoversAllLines() const;
+    bool currentLineIsOnlyLineWithoutNewline() const;
+    void clearSelection() { selection_.clear(); }
     int hitTestRow(int y) const;
     const LineView* currentLine() const;
     fs::FileProvider* resolveWritableProvider(std::string& relPath, std::string& errOut) const;
@@ -133,6 +138,7 @@ private:
     bool pasteAfterCurrentLine(std::string& errOut);
     bool insertEmptyLineBefore(std::string& errOut);
     bool insertEmptyLineAfter(std::string& errOut);
+    bool deleteSelectedOrCurrentLines(std::string& errOut);
     bool readRangeToString(uint64_t offset, uint64_t size, std::string& out,
                            std::string& errOut) const;
     bool rewriteFile(const std::vector<RewriteSegment>& segments, uint64_t anchorByte,
