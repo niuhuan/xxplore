@@ -21,6 +21,7 @@
 #include "ui/network_drive_form.hpp"
 #include "ui/renderer.hpp"
 #include "ui/settings_screen.hpp"
+#include "ui/text_editor_screen.hpp"
 #include "ui/theme.hpp"
 #include "ui/touch_event.hpp"
 #include "ui/toast.hpp"
@@ -101,6 +102,7 @@ enum class InputLayer {
     ModalInfo,
     ModalOptionList,
     ModalInstallPrompt,
+    TextEditorScreen,
     ImageViewer,
     InstallerScreen,
     SettingsScreen,
@@ -576,6 +578,13 @@ enum class PendingOptionListMode {
     None,
     ZipActions,
     ZipPackActions,
+    TextEditorMenu,
+};
+
+enum class PendingInfoAction {
+    None,
+    ClearFileClipboard,
+    ClearTextClipboard,
 };
 
 } // namespace
@@ -691,6 +700,7 @@ int Application::run(int argc, char* argv[]) {
     ModalInfo modalInfo;
     ModalOptionList modalOptionList;
     ModalInstallPrompt modalInstallPrompt;
+    TextEditorScreen textEditorScreen;
     ImageViewer imageViewer;
     InstallerScreen installerScreen;
     SettingsScreen settingsScreen;
@@ -728,6 +738,7 @@ int Application::run(int argc, char* argv[]) {
     std::vector<fs::ZipWriteSource> pendingZipPackSources;
     std::string pendingZipPackSourceDir;
     PendingOptionListMode pendingOptionListMode = PendingOptionListMode::None;
+    PendingInfoAction pendingInfoAction = PendingInfoAction::None;
     uint64_t zipPackTempCounter = 0;
     PendingPanelLoad pendingPanelLoad;
 
@@ -1360,6 +1371,17 @@ int Application::run(int argc, char* argv[]) {
             toast.show(i18n.t("error.image_load_failed"), err.c_str(), ToastKind::Error, 3000);
     };
 
+    auto openTextFile = [&](const std::string& path) {
+        std::string err;
+        if (!textEditorScreen.open(provMgr, path, err)) {
+            if (err == "not_utf8_bom") {
+                toast.show(i18n.t("text_editor.error_not_utf8"), "", ToastKind::Warning, 3000);
+            } else {
+                toast.show(i18n.t("error.operation_failed"), err.c_str(), ToastKind::Error, 3200);
+            }
+        }
+    };
+
     auto openFilePath = [&](PanelState& panel, const ListItem& item) {
         if (item.label == "..")
             return;
@@ -1384,6 +1406,10 @@ int Application::run(int argc, char* argv[]) {
         }
         if (fs::isImagePath(fullPath)) {
             openImageFile(fullPath);
+            return;
+        }
+        if (fs::isTextEditorPath(fullPath)) {
+            openTextFile(fullPath);
             return;
         }
 
@@ -2393,6 +2419,8 @@ int Application::run(int argc, char* argv[]) {
             inputLayer = InputLayer::SettingsScreen;
         else if (installerScreen.isOpen())
             inputLayer = InputLayer::InstallerScreen;
+        else if (textEditorScreen.isOpen())
+            inputLayer = InputLayer::TextEditorScreen;
         else if (imageViewer.isOpen())
             inputLayer = InputLayer::ImageViewer;
         else if (modalOptionList.isOpen())
@@ -2426,6 +2454,78 @@ int Application::run(int argc, char* argv[]) {
             break;
         case InputLayer::ModalProgress:
             break;
+
+        case InputLayer::TextEditorScreen: {
+            u64 editorKDown = kDown;
+            TouchTap editorTap = tap;
+            if (appConfig.touchButtonsEnabled && tap.active) {
+                FooterTouchButtonsLayout touchLayout = footerTouchButtonsLayout(true);
+                if (pointInRect(&tap, touchLayout.prevX, touchLayout.y, touchLayout.pageW,
+                                touchLayout.h)) {
+                    editorKDown |= HidNpadButton_AnyLeft;
+                    editorTap.active = false;
+                } else if (pointInRect(&tap, touchLayout.nextX, touchLayout.y,
+                                       touchLayout.pageW, touchLayout.h)) {
+                    editorKDown |= HidNpadButton_AnyRight;
+                    editorTap.active = false;
+                } else if (pointInRect(&tap, touchLayout.selectX, touchLayout.y,
+                                       touchLayout.selectW, touchLayout.h)) {
+                    editorKDown |= HidNpadButton_Y;
+                    editorTap.active = false;
+                }
+            }
+
+            TextEditorAction action = textEditorScreen.handleInput(editorKDown, &editorTap);
+            std::string editorErr;
+            if (textEditorScreen.takePendingError(editorErr)) {
+                toast.show(i18n.t("error.operation_failed"), editorErr.c_str(),
+                           ToastKind::Error, 3200);
+            }
+            if (action == TextEditorAction::Close) {
+                textEditorScreen.close();
+            } else if (action == TextEditorAction::OpenMenu) {
+                pendingOptionListMode = PendingOptionListMode::TextEditorMenu;
+                modalOptionList.open(
+                    i18n.t("text_editor.menu_title"), textEditorScreen.path(),
+                    textEditorScreen.buildMenuOptions(i18n),
+                    static_cast<int>(TextEditorMenuAction::Cancel),
+                    static_cast<int>(TextEditorMenuAction::Cancel));
+            } else if (action == TextEditorAction::EditCurrentLine) {
+                if (textEditorScreen.isReadOnly()) {
+                    toast.show(i18n.t("text_editor.read_only_toast"), "", ToastKind::Info, 2200);
+                    break;
+                }
+
+                std::string currentText;
+                if (!textEditorScreen.currentLineInputText(currentText, editorErr)) {
+                    toast.show(i18n.t("error.operation_failed"), editorErr.c_str(),
+                               ToastKind::Error, 3200);
+                    break;
+                }
+
+                const std::size_t inputCap =
+                    std::max<std::size_t>(currentText.size() + 4096, 64 * 1024);
+                std::vector<char> inputBuffer(inputCap, '\0');
+                std::strncpy(inputBuffer.data(), currentText.c_str(), inputBuffer.size() - 1);
+
+                if (!swkbdTextInput(i18n.t("text_editor.edit_title"),
+                                    i18n.t("text_editor.edit_guide"),
+                                    currentText.c_str(),
+                                    inputBuffer.data(), inputBuffer.size())) {
+                    break;
+                }
+
+                if (!textEditorScreen.replaceCurrentLine(inputBuffer.data(), editorErr)) {
+                    const char* detail = editorErr == "read_only"
+                        ? i18n.t("text_editor.read_only_toast")
+                        : editorErr.c_str();
+                    toast.show(i18n.t("error.operation_failed"), detail,
+                               ToastKind::Error, 3200);
+                    break;
+                }
+            }
+            break;
+        }
 
         case InputLayer::ImageViewer:
             imageViewer.handleInput(kDown);
@@ -2500,6 +2600,50 @@ int Application::run(int argc, char* argv[]) {
                     runZipPack(packSources, packSourceDir, activePanel);
                     break;
                 case ZipPackActionOption::Cancel:
+                default:
+                    break;
+                }
+            }
+
+            if (optionListMode == PendingOptionListMode::TextEditorMenu) {
+                bool openClipboard = false;
+                std::string err;
+                TextEditorMenuAction action = static_cast<TextEditorMenuAction>(option);
+                if (action == TextEditorMenuAction::Cancel)
+                    break;
+
+                if (!textEditorScreen.runMenuAction(action, openClipboard, err)) {
+                    const char* detail = err == "read_only"
+                        ? i18n.t("text_editor.read_only_toast")
+                        : err.c_str();
+                    toast.show(i18n.t("error.operation_failed"), detail, ToastKind::Error, 3200);
+                    break;
+                }
+
+                if (openClipboard) {
+                    pendingInfoAction = PendingInfoAction::ClearTextClipboard;
+                    modalInfo.open(i18n.t("text_editor.menu_view_clipboard"),
+                                   textEditorScreen.clipboardBody(i18n),
+                                   theme::FONT_SIZE_SMALL,
+                                   i18n.t("clipboard.clear_action"));
+                    break;
+                }
+
+                switch (action) {
+                case TextEditorMenuAction::Copy:
+                    toast.show(i18n.t("toast.copied"), "", ToastKind::Success, 2000);
+                    break;
+                case TextEditorMenuAction::Cut:
+                    toast.show(i18n.t("toast.cut"), "", ToastKind::Success, 2200);
+                    break;
+                case TextEditorMenuAction::PasteBefore:
+                case TextEditorMenuAction::PasteAfter:
+                    break;
+                case TextEditorMenuAction::InsertBefore:
+                case TextEditorMenuAction::InsertAfter:
+                    break;
+                case TextEditorMenuAction::ViewClipboard:
+                case TextEditorMenuAction::Cancel:
                 default:
                     break;
                 }
@@ -2761,9 +2905,17 @@ int Application::run(int argc, char* argv[]) {
                 bool clearClipboardFromInfo = modalInfo.takeActionRequested();
                 modalInfo.close();
                 if (clearClipboardFromInfo) {
-                    clipboard.clear();
-                    toast.show(i18n.t("toast.clipboard_cleared"), "", ToastKind::Info, 2000);
+                    if (pendingInfoAction == PendingInfoAction::ClearTextClipboard) {
+                        textEditorScreen.clearClipboard();
+                        toast.show(i18n.t("toast.clipboard_cleared"), "",
+                                   ToastKind::Info, 2000);
+                    } else {
+                        clipboard.clear();
+                        toast.show(i18n.t("toast.clipboard_cleared"), "",
+                                   ToastKind::Info, 2000);
+                    }
                 }
+                pendingInfoAction = PendingInfoAction::None;
             }
             break;
 
@@ -3051,6 +3203,7 @@ int Application::run(int argc, char* argv[]) {
                     body += '\n';
                 }
                 if (clipboard.items().empty()) body += i18n.t("clipboard.empty");
+                pendingInfoAction = PendingInfoAction::ClearFileClipboard;
                 modalInfo.open(i18n.t("menu.clipboard_view"), body, 0,
                                i18n.t("clipboard.clear_action"));
                 mainMenu.close();
@@ -3374,7 +3527,12 @@ int Application::run(int argc, char* argv[]) {
         rightPanel.list.updateCache(renderer, fontManager, theme::ACTIVE_PANEL_W,
                                     theme::PANEL_CONTENT_H);
 
-        renderScene();
+        if (textEditorScreen.isOpen()) {
+            textEditorScreen.render(renderer, fontManager, i18n, findIcon(icons, "menu"),
+                                    appConfig.touchButtonsEnabled);
+        } else {
+            renderScene();
+        }
 
         const bool anyOverlay =
             mainMenu.isOpen() || modalConfirm.isOpen() || modalChoice.isOpen()
@@ -3382,13 +3540,18 @@ int Application::run(int argc, char* argv[]) {
             || modalInstallPrompt.isOpen()
             || networkDriveForm.isOpen() || ftpServerScreen.isOpen() || loadingOverlay.isVisible();
         if (anyOverlay && !imageViewer.isOpen() && !installerScreen.isOpen()
+            && !textEditorScreen.isOpen()
             && !settingsScreen.isOpen()
             && !ftpServerScreen.isOpen()
             && !webSocketInstallerScreen.isOpen()) {
             int scrimH = theme::HEADER_H + theme::PANEL_CONTENT_H;
             renderer.drawRectFilled(0, 0, theme::SCREEN_W, scrimH, theme::MENU_SCRIM_CONTENT);
         }
+        if (anyOverlay && textEditorScreen.isOpen())
+            renderer.drawRectFilled(0, 0, theme::SCREEN_W, theme::SCREEN_H,
+                                    theme::MENU_SCRIM_CONTENT);
         if (!imageViewer.isOpen() && !installerScreen.isOpen()
+            && !textEditorScreen.isOpen()
             && !settingsScreen.isOpen()
             && !ftpServerScreen.isOpen()
             && !webSocketInstallerScreen.isOpen()
@@ -3420,6 +3583,7 @@ int Application::run(int argc, char* argv[]) {
     provMgr.clearPathLoadCancelToken();
     leftPanel.list.destroyCache();
     rightPanel.list.destroyCache();
+    textEditorScreen.close();
     ftpServerScreen.close();
     webSocketInstallerScreen.close();
     usbDriveManager.shutdown();

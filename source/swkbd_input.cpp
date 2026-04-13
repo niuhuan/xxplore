@@ -15,6 +15,8 @@ bool swkbdTextInput(const char* headerText, const char* guideText, const char* i
     if (R_FAILED(rc)) return false;
 
     swkbdConfigMakePresetDefault(&kbd);
+    swkbdConfigSetStringLenMax(&kbd, outLen > 0 ? static_cast<u32>(outLen - 1) : 0);
+    swkbdConfigSetReturnButtonFlag(&kbd, 0);
     if (headerText && headerText[0])
         swkbdConfigSetHeaderText(&kbd, headerText);
     if (guideText && guideText[0])

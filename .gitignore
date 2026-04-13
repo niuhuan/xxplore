@@ -11,6 +11,8 @@ build/
 *.nacp
 *.log
 *.lst
+*.map
+dist/
 
 # agents files
 AGENTS.md

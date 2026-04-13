@@ -334,6 +334,11 @@ bool isInstallPackagePath(const std::string& path) {
     return ext == ".nsp" || ext == ".nsz" || ext == ".xci" || ext == ".xcz";
 }
 
+bool isTextEditorPath(const std::string& path) {
+    const std::string ext = pathExtensionLower(path);
+    return ext == ".txt" || ext == ".md";
+}
+
 bool isZipFilePath(const std::string& path) {
     if (isZipBrowsePath(path))
         return false;

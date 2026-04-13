@@ -38,6 +38,7 @@ const char* iconForEntry(const FileEntry& entry);
 bool statPath(const std::string& path, FileStatInfo& out);
 bool isImagePath(const std::string& path);
 bool isInstallPackagePath(const std::string& path);
+bool isTextEditorPath(const std::string& path);
 bool isZipFilePath(const std::string& path);
 bool isZipBrowsePath(const std::string& path);
 bool splitZipBrowsePath(const std::string& path, std::string& outerPath, std::string& innerPath);
