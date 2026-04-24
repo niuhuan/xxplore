@@ -41,6 +41,7 @@
 #include <cstring>
 #include <memory>
 #include <mutex>
+#include <unordered_map>
 #include <string>
 #include <thread>
 #include <unistd.h>
@@ -147,6 +148,7 @@ struct FooterTouchButtonsLayout {
 struct PanelState {
     std::string      path;
     xxplore::FileList list;
+    std::unordered_map<std::string, FileListViewState> savedViews;
 };
 
 struct PendingPanelLoad {
@@ -439,6 +441,9 @@ static bool buildItemsForPath(const std::string& path, const std::vector<IconEnt
 static bool navigatePanel(PanelState& panel, const std::string& newPath,
                           const std::vector<IconEntry>& icons, const I18n& i18n,
                           fs::ProviderManager& provMgr, std::string* errOut = nullptr) {
+    if (!panel.path.empty())
+        panel.savedViews[panel.path] = panel.list.captureViewState();
+
     std::vector<ListItem> items;
     if (!buildItemsForPath(newPath, icons, i18n, provMgr, items, errOut))
         return false;
@@ -447,6 +452,9 @@ static bool navigatePanel(PanelState& panel, const std::string& newPath,
     bool allowSel = provMgr.pathAllowsSelection(newPath);
     panel.path = newPath;
     panel.list.setItems(std::move(items), hasGoUp, allowSel);
+    auto saved = panel.savedViews.find(newPath);
+    if (saved != panel.savedViews.end())
+        panel.list.restoreViewState(saved->second);
     return true;
 }
 
@@ -859,12 +867,17 @@ int Application::run(int argc, char* argv[]) {
     };
 
     auto navigatePanelToUpOnly = [&](PanelState& panel, const std::string& targetPath) {
+        if (!panel.path.empty())
+            panel.savedViews[panel.path] = panel.list.captureViewState();
         std::vector<ListItem> items;
         if (!fs::ProviderManager::isVirtualRoot(targetPath))
             items.push_back({"..", findIcon(icons, "back"), ACTION_GO_UP, true, 0, false});
         panel.path = targetPath;
         panel.list.setItems(std::move(items), !fs::ProviderManager::isVirtualRoot(targetPath),
                             false);
+        auto saved = panel.savedViews.find(targetPath);
+        if (saved != panel.savedViews.end())
+            panel.list.restoreViewState(saved->second);
     };
 
     auto resetPanelsAffectedByPaths = [&](const std::vector<std::string>& paths) {
@@ -3512,11 +3525,17 @@ int Application::run(int argc, char* argv[]) {
                                 loadedItems.size());
 #endif
                     PanelState& targetPanel = panelFor(loadPanel);
+                    if (!targetPanel.path.empty())
+                        targetPanel.savedViews[targetPanel.path] =
+                            targetPanel.list.captureViewState();
                     bool hasGoUp = !fs::ProviderManager::isVirtualRoot(loadPath);
                     bool allowSel = provMgr.pathAllowsSelection(loadPath);
                     targetPanel.path = loadPath;
                     targetPanel.list.clearSelection();
                     targetPanel.list.setItems(std::move(loadedItems), hasGoUp, allowSel);
+                    auto saved = targetPanel.savedViews.find(loadPath);
+                    if (saved != targetPanel.savedViews.end())
+                        targetPanel.list.restoreViewState(saved->second);
                 }
             }
         }

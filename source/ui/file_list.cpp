@@ -91,6 +91,47 @@ void FileList::setCursor(int index) {
     }
 }
 
+FileListViewState FileList::captureViewState() const {
+    FileListViewState state;
+    state.cursor = cursor;
+    state.scrollTop = scrollTop;
+    const ListItem* item = getSelectedItem();
+    if (item)
+        state.focusedLabel = item->label;
+    return state;
+}
+
+void FileList::restoreViewState(const FileListViewState& state) {
+    if (items.empty()) {
+        cursor = 0;
+        scrollTop = 0;
+        dirty = true;
+        return;
+    }
+
+    int restoredCursor = state.cursor;
+    if (!state.focusedLabel.empty()) {
+        for (int i = 0; i < static_cast<int>(items.size()); ++i) {
+            if (items[i].label == state.focusedLabel) {
+                restoredCursor = i;
+                break;
+            }
+        }
+    }
+
+    if (restoredCursor < 0)
+        restoredCursor = 0;
+    int last = static_cast<int>(items.size()) - 1;
+    if (restoredCursor > last)
+        restoredCursor = last;
+
+    cursor = restoredCursor;
+    scrollTop = state.scrollTop;
+    if (scrollTop < 0)
+        scrollTop = 0;
+    dirty = true;
+}
+
 int FileList::hitTestIndex(int localY) const {
     if (items.empty() || localY < 0)
         return -1;

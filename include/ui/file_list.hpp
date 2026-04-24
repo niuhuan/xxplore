@@ -10,6 +10,12 @@ namespace xxplore {
 class Renderer;
 class FontManager;
 
+struct FileListViewState {
+    int         cursor = 0;
+    int         scrollTop = 0;
+    std::string focusedLabel;
+};
+
 /// A single item in a FileList. Holds display label, optional icon texture,
 /// and an opaque action id for the caller to interpret on selection.
 struct ListItem {
@@ -48,6 +54,9 @@ public:
     void setCursor(int index);
     int  hitTestIndex(int localY) const;
     int  getCursor() const { return cursor; }
+    int  getScrollTop() const { return scrollTop; }
+    FileListViewState captureViewState() const;
+    void restoreViewState(const FileListViewState& state);
 
     /// Return the item under the cursor, or nullptr if list is empty.
     const ListItem* getSelectedItem() const;
