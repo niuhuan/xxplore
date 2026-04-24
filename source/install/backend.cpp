@@ -1379,6 +1379,7 @@ private:
 
 struct StreamProgressContext {
     const InstallBackendCallbacks* callbacks = nullptr;
+    std::string packageDisplayName;
     uint64_t packageCompletedBytes = 0;
     uint64_t packageTotalBytes = 1;
     uint64_t totalCompletedBytesBefore = 0;
@@ -1446,7 +1447,10 @@ void emitProgress(StreamProgressContext& ctx, uint64_t currentItemBytes, uint64_
 
 void beginContainerEntry(const std::string& name, uint64_t entrySize) {
     if (gStreamProgress.callbacks) {
-        emitStatus(*gStreamProgress.callbacks, name);
+        const std::string status = gStreamProgress.packageDisplayName.empty()
+                                       ? name
+                                       : gStreamProgress.packageDisplayName + "(" + name + ")";
+        emitStatus(*gStreamProgress.callbacks, status);
         emitLog(*gStreamProgress.callbacks, "Installing " + name);
         emitProgress(gStreamProgress, 0, entrySize);
     }
@@ -2393,6 +2397,7 @@ bool runInstallQueue(const std::vector<InstallQueueItem>& items, bool installToN
             ensurePackageFitsTarget(items[i], storageId);
 
             gStreamProgress.callbacks = &callbacks;
+            gStreamProgress.packageDisplayName = items[i].name;
             gStreamProgress.packageCompletedBytes = 0;
             gStreamProgress.packageTotalBytes = perPackageWork[i];
             gStreamProgress.totalCompletedBytesBefore = completedBytes;
