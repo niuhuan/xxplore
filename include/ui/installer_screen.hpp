@@ -80,8 +80,17 @@ private:
     bool                     abortedByUser_ = false;
     ModalConfirm             interruptConfirm_;
     util::ByteRateMeter      speedMeter_;
+    uint64_t                 totalWorkBytes_ = 0;
     std::shared_ptr<InstallDataSourceCallbacks> sourceCallbacks_;
     mutable std::mutex       mutex_;
+
+    // Display snapshot - updated at most once per second to reduce render jitter.
+    mutable uint64_t         dispSpeedBytesPerSec_  = 0;
+    mutable bool             dispHasSpeedSample_    = false;
+    mutable uint64_t         dispTransferredBytes_  = 0;
+    mutable uint64_t         dispTotalWorkBytes_    = 0;
+    mutable bool             dispSpeedFinished_     = false;
+    mutable uint64_t         dispLastUpdateSec_     = 0;
     std::thread              worker_;
 };
 

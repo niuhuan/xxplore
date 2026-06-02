@@ -71,6 +71,27 @@ std::string formatInstallSpeed(uint64_t bytesPerSec) {
     return buf;
 }
 
+std::string formatInstallEta(uint64_t seconds) {
+    char buf[64];
+    if (seconds >= 3600ULL) {
+        uint64_t h = seconds / 3600ULL;
+        uint64_t m = (seconds % 3600ULL) / 60ULL;
+        std::snprintf(buf, sizeof(buf), "%lluh %llum",
+                      static_cast<unsigned long long>(h),
+                      static_cast<unsigned long long>(m));
+    } else if (seconds >= 60ULL) {
+        uint64_t m = seconds / 60ULL;
+        uint64_t s = seconds % 60ULL;
+        std::snprintf(buf, sizeof(buf), "%llum %llus",
+                      static_cast<unsigned long long>(m),
+                      static_cast<unsigned long long>(s));
+    } else {
+        std::snprintf(buf, sizeof(buf), "%llus",
+                      static_cast<unsigned long long>(seconds));
+    }
+    return buf;
+}
+
 } // namespace
 
 void InstallerScreen::open(std::vector<InstallQueueItem> items, InstallDeleteMode deleteMode,
@@ -105,7 +126,14 @@ void InstallerScreen::open(std::vector<InstallQueueItem> items, InstallDeleteMod
         abortRequested_.store(false);
         interruptConfirm_.close();
         speedMeter_.reset();
+        totalWorkBytes_ = 0;
         sourceCallbacks_ = std::move(sourceCallbacks);
+        dispSpeedBytesPerSec_ = 0;
+        dispHasSpeedSample_   = false;
+        dispTransferredBytes_ = 0;
+        dispTotalWorkBytes_   = 0;
+        dispSpeedFinished_    = false;
+        dispLastUpdateSec_    = 0;
     }
     appendLog(appletMode ? "Applet mode detected." : "Title override mode detected.");
     appendLog("Preparing install queue...");
@@ -126,7 +154,14 @@ void InstallerScreen::close() {
     abortedByUser_ = false;
     abortRequested_.store(false);
     interruptConfirm_.close();
+    totalWorkBytes_ = 0;
     sourceCallbacks_.reset();
+    dispSpeedBytesPerSec_ = 0;
+    dispHasSpeedSample_   = false;
+    dispTransferredBytes_ = 0;
+    dispTotalWorkBytes_   = 0;
+    dispSpeedFinished_    = false;
+    dispLastUpdateSec_    = 0;
 }
 
 bool InstallerScreen::shouldRefreshOnClose() const {
@@ -186,6 +221,13 @@ void InstallerScreen::startInstallWorker() {
         abortRequested_.store(false);
         interruptConfirm_.close();
         speedMeter_.reset();
+        totalWorkBytes_ = 0;
+        dispSpeedBytesPerSec_ = 0;
+        dispHasSpeedSample_   = false;
+        dispTransferredBytes_ = 0;
+        dispTotalWorkBytes_   = 0;
+        dispSpeedFinished_    = false;
+        dispLastUpdateSec_    = 0;
     }
 
     worker_ = std::thread([this, items = std::move(items), installToNand, deleteAfterInstall,
@@ -213,8 +255,9 @@ void InstallerScreen::startInstallWorker() {
                                            uint64_t totalBytesTotal) {
             (void)currentItemBytes;
             (void)currentItemTotal;
-            (void)totalBytesTotal;
             std::lock_guard<std::mutex> lock(mutex_);
+            if (totalBytesTotal > 0)
+                totalWorkBytes_ = totalBytesTotal;
             speedMeter_.update(totalBytesDone, static_cast<uint64_t>(std::time(nullptr)));
         };
         callbacks.shouldAbort = [this]() {
@@ -475,6 +518,7 @@ void InstallerScreen::render(Renderer& renderer, FontManager& fm, const I18n& i1
     uint64_t speedBytesPerSec = 0;
     bool hasSpeedSample = false;
     uint64_t transferredBytes = 0;
+    uint64_t totalWorkBytes = 0;
     bool speedFinished = false;
     uint64_t nowSec = static_cast<uint64_t>(std::time(nullptr));
     {
@@ -495,10 +539,20 @@ void InstallerScreen::render(Renderer& renderer, FontManager& fm, const I18n& i1
         currentStatus = currentStatus_;
         errorMessage = errorMessage_;
         abortedByUser = abortedByUser_;
-        speedBytesPerSec = speedMeter_.rateBytesPerSec(nowSec);
-        hasSpeedSample = speedMeter_.hasRate(nowSec);
-        transferredBytes = speedMeter_.latestTotalBytes();
-        speedFinished = speedMeter_.finished();
+        // Throttle display snapshot to once per second to reduce render jitter.
+        if (nowSec != dispLastUpdateSec_) {
+            dispSpeedBytesPerSec_ = speedMeter_.rateBytesPerSec(nowSec);
+            dispHasSpeedSample_   = speedMeter_.hasRate(nowSec);
+            dispTransferredBytes_ = speedMeter_.latestTotalBytes();
+            dispTotalWorkBytes_   = totalWorkBytes_;
+            dispSpeedFinished_    = speedMeter_.finished();
+            dispLastUpdateSec_    = nowSec;
+        }
+        speedBytesPerSec = dispSpeedBytesPerSec_;
+        hasSpeedSample   = dispHasSpeedSample_;
+        transferredBytes = dispTransferredBytes_;
+        totalWorkBytes   = dispTotalWorkBytes_;
+        speedFinished    = dispSpeedFinished_;
     }
     if (!open)
         return;
@@ -712,10 +766,27 @@ void InstallerScreen::render(Renderer& renderer, FontManager& fm, const I18n& i1
             speedText = i18n.t("installer.speed_pending");
         else
             speedText = fs::formatSize(transferredBytes);
+
+        std::string etaText;
+        if (hasSpeedSample && !speedFinished && speedBytesPerSec > 0 &&
+            totalWorkBytes > transferredBytes) {
+            uint64_t remainingBytes = totalWorkBytes - transferredBytes;
+            uint64_t etaSeconds = remainingBytes / speedBytesPerSec;
+            etaText = std::string(i18n.t("installer.eta")) + " " + formatInstallEta(etaSeconds);
+        }
+
+        // Layout (right-aligned): ... [ETA]  [speed]
+        int rightEdge = x + (cardW - 48);
+        int textY = cardY + cardH - 32;
         int speedW = fm.measureText(speedText.c_str(), theme::FONT_SIZE_SMALL);
-        fm.drawText(renderer.sdl(), speedText.c_str(),
-                    x + (cardW - 48) - speedW, cardY + cardH - 32,
+        fm.drawText(renderer.sdl(), speedText.c_str(), rightEdge - speedW, textY,
                     theme::FONT_SIZE_SMALL, theme::TEXT_SECONDARY);
+        if (!etaText.empty()) {
+            int etaW = fm.measureText(etaText.c_str(), theme::FONT_SIZE_SMALL);
+            fm.drawText(renderer.sdl(), etaText.c_str(),
+                        rightEdge - speedW - 16 - etaW, textY,
+                        theme::FONT_SIZE_SMALL, theme::TEXT_SECONDARY);
+        }
     }
 
     interruptConfirm_.render(renderer, fm, i18n);
