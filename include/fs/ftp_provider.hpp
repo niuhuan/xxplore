@@ -1,6 +1,8 @@
 #pragma once
 
 #include "fs/file_provider.hpp"
+#include <memory>
+#include <mutex>
 #include <string>
 
 namespace xxplore {
@@ -41,6 +43,11 @@ private:
     std::string address_;
     std::string user_;
     std::string pass_;
+
+    // Persistent control connection reused across readFile() calls so we don't
+    // login/RETR/logout on every read (held as an opaque FtpSession in the .cpp).
+    std::shared_ptr<void> readSession_;
+    std::mutex readSessionMutex_;
 };
 
 } // namespace fs

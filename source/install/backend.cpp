@@ -1399,6 +1399,12 @@ bool isRemotePath(const std::string& path) {
     if (path.rfind("web:", 0) == 0)
         return true;
 
+    // Files browsed inside a zip archive (e.g. "sdmc:/x.zip:/inner/foo.nsp") are
+    // decompressed on the fly, so they must be read through the provider callbacks
+    // (streaming) rather than opened as a plain local file.
+    if (path.find(".zip:/") != std::string::npos)
+        return true;
+
     auto schemePos = path.find(":/");
     if (schemePos == std::string::npos)
         return false;
@@ -2450,14 +2456,24 @@ bool runInstallQueue(const std::vector<InstallQueueItem>& items, bool installToN
             debugPrint("install", "package done name=%s", items[i].name.c_str());
 
             if (deleteAfterInstall) {
-                if (remote)
-                    continue;
-                std::error_code ec;
-                std::filesystem::remove(items[i].path, ec);
-                if (ec)
-                    emitLog(callbacks, "Delete failed: " + items[i].name + " (" + ec.message() + ")");
-                else
-                    emitLog(callbacks, "Deleted source: " + items[i].name);
+                // Prefer the provider-backed delete so network/USB sources can be
+                // removed too; fall back to a direct filesystem remove for local
+                // paths when no callback is wired.
+                if (sourceCallbacks && sourceCallbacks->deleteSource) {
+                    std::string delErr;
+                    if (sourceCallbacks->deleteSource(items[i], delErr))
+                        emitLog(callbacks, "Deleted source: " + items[i].name);
+                    else
+                        emitLog(callbacks, "Delete failed: " + items[i].name + " (" + delErr + ")");
+                } else if (!remote) {
+                    std::error_code ec;
+                    std::filesystem::remove(items[i].path, ec);
+                    if (ec)
+                        emitLog(callbacks,
+                                "Delete failed: " + items[i].name + " (" + ec.message() + ")");
+                    else
+                        emitLog(callbacks, "Deleted source: " + items[i].name);
+                }
             }
         }
 

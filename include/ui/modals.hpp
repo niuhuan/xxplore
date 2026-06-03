@@ -121,7 +121,9 @@ private:
 /// Three-button install prompt: Cancel / Install / Install+Delete.
 class ModalInstallPrompt {
 public:
-    void open(std::string title, std::string body);
+    /// When allowDelete is false the "Install and delete" choice is hidden, e.g.
+    /// for sources that cannot be deleted (inside a zip, network/USB drives).
+    void open(std::string title, std::string body, bool allowDelete = true);
     void close();
 
     bool isOpen() const { return active; }
@@ -133,6 +135,7 @@ private:
     std::string title;
     std::string body;
     int         focus = 0; ///< 0=Cancel, 1=Install, 2=Install+Delete
+    bool        allowDelete = true;
 };
 
 /// Generic vertical option list modal. Returns selected option index or -1 when idle.

@@ -37,6 +37,9 @@ struct InstallDataSourceCallbacks {
                                                            uint64_t expectedSize,
                                                            std::string& errOut)>
         openSequentialRead;
+    // Delete the source after a successful install (used by "Install and delete").
+    // Routes through the provider, so it works for network/USB sources too.
+    std::function<bool(const InstallQueueItem& item, std::string& errOut)> deleteSource;
 };
 
 bool runInstallQueue(const std::vector<InstallQueueItem>& items, bool installToNand,

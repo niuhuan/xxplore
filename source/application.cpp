@@ -128,6 +128,13 @@ struct HeaderIconLayout {
     int menuIconX = 0;
     int iconY = 0;
     int iconSize = 0;
+    // Touch "back" button (equivalent to B), shown left of the about icon only
+    // when touch buttons are enabled. Styled like the footer page buttons.
+    bool backVisible = false;
+    int backX = 0;
+    int backY = 0;
+    int backW = 0;
+    int backH = 0;
 };
 
 struct FooterTouchButtonsLayout {
@@ -285,7 +292,7 @@ static SDL_Texture* findIcon(const std::vector<IconEntry>& icons, const char* na
     return nullptr;
 }
 
-static HeaderIconLayout headerIconLayout() {
+static HeaderIconLayout headerIconLayout(bool touchButtonsEnabled = false) {
     HeaderIconLayout layout;
     layout.iconSize = 24;
     layout.hitW = 42;
@@ -298,6 +305,14 @@ static HeaderIconLayout headerIconLayout() {
     layout.aboutHitX = layout.menuHitX - kGap - layout.hitW;
     layout.menuIconX = layout.menuHitX + (layout.hitW - layout.iconSize) / 2;
     layout.aboutIconX = layout.aboutHitX + (layout.hitW - layout.iconSize) / 2;
+
+    if (touchButtonsEnabled) {
+        layout.backVisible = true;
+        layout.backW = 42;
+        layout.backH = 28;
+        layout.backY = (theme::HEADER_H - layout.backH) / 2;
+        layout.backX = layout.aboutHitX - kGap - layout.backW;
+    }
     return layout;
 }
 
@@ -332,7 +347,7 @@ static void drawThickChevron(Renderer& renderer, int x, int y, int w, int h, boo
     int cy = y + h / 2;
     int halfH = 7;
     int halfW = 4;
-    int dir = left ? -1 : 1;
+    int dir = left ? 1 : -1;
     for (int offset = -1; offset <= 1; ++offset) {
         renderer.drawLine(cx + dir * halfW, cy - halfH + offset, cx - dir * halfW, cy + offset,
                           color);
@@ -1026,6 +1041,18 @@ int Application::run(int argc, char* argv[]) {
         startPathLoad(panel, targetPath, fallbackToUpOnly);
     };
 
+    // Installing from a zip that lives on a remote drive (FTP/WebDAV/SMB) is
+    // currently far too slow (per-read decompression + network round-trips), so
+    // only zip archives on sdmc are accepted as install sources for now. Plain
+    // (non-zip) packages on remote drives are unaffected.
+    auto isInstallablePackagePath = [](const std::string& fullPath) -> bool {
+        if (!fs::isInstallPackagePath(fullPath))
+            return false;
+        if (fs::isZipBrowsePath(fullPath) && fullPath.rfind("sdmc:/", 0) != 0)
+            return false;
+        return true;
+    };
+
     auto buildInstallItems = [&](PanelState& panel, bool useSelection) {
         std::vector<InstallQueueItem> result;
         const auto& items = panel.list.getItems();
@@ -1036,9 +1063,7 @@ int Application::run(int argc, char* argv[]) {
             if (item.label == ".." || item.action == ACTION_ENTER)
                 return;
             std::string fullPath = fs::joinPath(panel.path, item.label);
-            if (fs::isZipBrowsePath(fullPath))
-                return;
-            if (!fs::isInstallPackagePath(fullPath))
+            if (!isInstallablePackagePath(fullPath))
                 return;
 
             InstallQueueItem queueItem;
@@ -1129,7 +1154,7 @@ int Application::run(int argc, char* argv[]) {
             if (items[i].label == ".." || items[i].action == ACTION_ENTER)
                 return false;
             std::string fullPath = fs::joinPath(panel.path, items[i].label);
-            if (!fs::isInstallPackagePath(fullPath))
+            if (!isInstallablePackagePath(fullPath))
                 return false;
         }
         return selectedCount > 0;
@@ -1159,6 +1184,20 @@ int Application::run(int argc, char* argv[]) {
             return;
         pendingInstallItems = std::move(items);
 
+        // "Install and delete" is only offered when the source provider is
+        // writable. Local sdmc and self-hosted SMB/FTP/WebDAV/USB drives are
+        // writable by default, so deletion is allowed there. Read-only sources
+        // (inside a zip archive, or a drive mounted read-only) hide the option.
+        bool allowDelete = true;
+        for (const auto& it : pendingInstallItems) {
+            std::string relPath;
+            fs::FileProvider* prov = provMgr.resolveProvider(it.path, relPath);
+            if (!prov || prov->isReadOnly()) {
+                allowDelete = false;
+                break;
+            }
+        }
+
         std::string body;
         if (pendingInstallItems.size() == 1) {
             body = i18n.t("installer.prompt_single");
@@ -1171,7 +1210,7 @@ int Application::run(int argc, char* argv[]) {
             body += " ";
             body += i18n.t("installer.prompt_multi_suffix");
         }
-        modalInstallPrompt.open(i18n.t("installer.prompt_title"), body);
+        modalInstallPrompt.open(i18n.t("installer.prompt_title"), body, allowDelete);
     };
 
     auto openArchivePrompt = [&](std::vector<ZipArchiveItem> items, bool canBrowse,
@@ -1324,6 +1363,10 @@ int Application::run(int argc, char* argv[]) {
                 };
                 return seq;
             };
+        sourceCallbacks->deleteSource =
+            [&provMgr](const InstallQueueItem& item, std::string& errOut) {
+                return provMgr.removeAll(item.path, errOut);
+            };
         installerScreen.open(std::move(items), InstallDeleteMode::KeepFiles, appletMode, i18n,
                              sourceCallbacks);
         activeRef().list.clearSelection();
@@ -1409,12 +1452,12 @@ int Application::run(int argc, char* argv[]) {
             openArchivePrompt(buildZipItems(panel, false), true, canExtractOther);
             return;
         }
-        if (fs::isZipBrowsePath(fullPath)) {
-            toast.show(i18n.t("error.open_not_supported"), item.label.c_str(), ToastKind::Info, 2500);
+        if (isInstallablePackagePath(fullPath)) {
+            openInstallPrompt(buildInstallItems(panel, false));
             return;
         }
-        if (fs::isInstallPackagePath(fullPath)) {
-            openInstallPrompt(buildInstallItems(panel, false));
+        if (fs::isZipBrowsePath(fullPath)) {
+            toast.show(i18n.t("error.open_not_supported"), item.label.c_str(), ToastKind::Info, 2500);
             return;
         }
         if (fs::isImagePath(fullPath)) {
@@ -1540,7 +1583,7 @@ int Application::run(int argc, char* argv[]) {
         int rx      = lw;
         renderer.clear(theme::BG);
         renderer.drawRectFilled(0, 0, theme::SCREEN_W, theme::HEADER_H, theme::HEADER_BG);
-        HeaderIconLayout headerIcons = headerIconLayout();
+        HeaderIconLayout headerIcons = headerIconLayout(appConfig.touchButtonsEnabled);
         const char* titleText = appTitle();
         int titleX = theme::PADDING;
         int titleTextH = fontManager.fontHeight(theme::FONT_SIZE_TITLE);
@@ -1552,7 +1595,9 @@ int Application::run(int argc, char* argv[]) {
             constexpr int kIconGap = 18;
             int pathX = titleX + fontManager.measureText(titleText, theme::FONT_SIZE_TITLE) +
                         kTitleGap;
-            int pathMaxW = headerIcons.aboutHitX - kIconGap - pathX;
+            int pathRightLimit = headerIcons.backVisible ? headerIcons.backX
+                                                         : headerIcons.aboutHitX;
+            int pathMaxW = pathRightLimit - kIconGap - pathX;
             if (pathMaxW > 24) {
                 int pathTextH = fontManager.fontHeight(theme::FONT_SIZE_SMALL);
                 int pathY = (theme::HEADER_H - pathTextH) / 2;
@@ -1568,6 +1613,14 @@ int Application::run(int argc, char* argv[]) {
         if (SDL_Texture* menuIcon = findIcon(icons, "menu")) {
             renderer.drawTexture(menuIcon, headerIcons.menuIconX, headerIcons.iconY,
                                  headerIcons.iconSize, headerIcons.iconSize);
+        }
+        if (headerIcons.backVisible) {
+            renderer.drawRoundedRectFilled(headerIcons.backX, headerIcons.backY, headerIcons.backW,
+                                           headerIcons.backH, 8, theme::SURFACE);
+            renderer.drawRoundedRect(headerIcons.backX, headerIcons.backY, headerIcons.backW,
+                                     headerIcons.backH, 8, theme::DIVIDER);
+            drawThickChevron(renderer, headerIcons.backX, headerIcons.backY, headerIcons.backW,
+                             headerIcons.backH, true, theme::PRIMARY);
         }
         renderer.drawRectFilled(0, theme::HEADER_H - 1, theme::SCREEN_W, 1, theme::DIVIDER);
         renderer.setClipRect(0, panelY_, lw, panelH_);
@@ -2963,6 +3016,10 @@ int Application::run(int argc, char* argv[]) {
                             };
                             return seq;
                         };
+                    sourceCallbacks->deleteSource =
+                        [&provMgr](const InstallQueueItem& item, std::string& errOut) {
+                            return provMgr.removeAll(item.path, errOut);
+                        };
                     installerScreen.open(
                         pendingInstallItems,
                         result == InstallPromptResult::InstallAndDelete
@@ -3007,7 +3064,7 @@ int Application::run(int argc, char* argv[]) {
             }
 
             if (tap.active && tap.y >= 0 && tap.y < theme::HEADER_H) {
-                HeaderIconLayout headerIcons = headerIconLayout();
+                HeaderIconLayout headerIcons = headerIconLayout(appConfig.touchButtonsEnabled);
                 if (tap.x >= headerIcons.menuHitX &&
                     tap.x < (headerIcons.menuHitX + headerIcons.hitW) &&
                     tap.y >= headerIcons.hitY &&
@@ -3022,6 +3079,10 @@ int Application::run(int argc, char* argv[]) {
                                    localizedDocText("about", "help.about_body"),
                                    theme::FONT_SIZE_ITEM);
                     consumed = true;
+                } else if (headerIcons.backVisible &&
+                           pointInRect(&tap, headerIcons.backX, headerIcons.backY,
+                                       headerIcons.backW, headerIcons.backH)) {
+                    baseKDown |= HidNpadButton_B;
                 }
             }
 

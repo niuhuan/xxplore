@@ -537,11 +537,12 @@ void ModalInfo::render(Renderer& renderer, FontManager& fm) {
 
 // ---- ModalInstallPrompt ----
 
-void ModalInstallPrompt::open(std::string t, std::string b) {
+void ModalInstallPrompt::open(std::string t, std::string b, bool allowDelete_) {
     active = true;
     title  = std::move(t);
     body   = std::move(b);
     focus  = 0;
+    allowDelete = allowDelete_;
 }
 
 void ModalInstallPrompt::close() {
@@ -552,15 +553,17 @@ void ModalInstallPrompt::close() {
 
 InstallPromptResult ModalInstallPrompt::handleInput(uint64_t kDown, const TouchTap* tap) {
     if (!active) return InstallPromptResult::None;
+    const int btnCount = allowDelete ? 3 : 2;
+    const int lastFocus = btnCount - 1;
     int cx = (theme::SCREEN_W - kCardW) / 2;
     int cy = (theme::SCREEN_H - kCardH) / 2;
     int btnY = cy + kCardH - 68;
     const int hitW = 176;
     const int gap = 28;
-    int total = hitW * 3 + gap * 2;
+    int total = hitW * btnCount + gap * (btnCount - 1);
     int bx = cx + (kCardW - total) / 2;
     if (tap && tap->active) {
-        for (int i = 0; i < 3; ++i) {
+        for (int i = 0; i < btnCount; ++i) {
             if (!pointInRect(tap, bx + i * (hitW + gap) - kOptionTouchPadX,
                              btnY - kOptionTouchPadY,
                              hitW + kOptionTouchPadX * 2,
@@ -585,11 +588,11 @@ InstallPromptResult ModalInstallPrompt::handleInput(uint64_t kDown, const TouchT
     }
     if (kDown & HidNpadButton_AnyLeft) {
         focus--;
-        if (focus < 0) focus = 2;
+        if (focus < 0) focus = lastFocus;
     }
     if (kDown & HidNpadButton_AnyRight) {
         focus++;
-        if (focus > 2) focus = 0;
+        if (focus > lastFocus) focus = 0;
     }
     return InstallPromptResult::None;
 }
@@ -618,11 +621,12 @@ void ModalInstallPrompt::render(Renderer& renderer, FontManager& fm, const I18n&
         i18n.t("installer.install"),
         i18n.t("installer.install_delete"),
     };
+    const int btnCount = allowDelete ? 3 : 2;
     int btnY = cy + cardH - 68;
     int gap  = 28;
-    int total = 176 * 3 + gap * 2;
+    int total = 176 * btnCount + gap * (btnCount - 1);
     int bx = cx + (cardW - total) / 2;
-    for (int i = 0; i < 3; i++) {
+    for (int i = 0; i < btnCount; i++) {
         SDL_Color col = (focus == i) ? PRIMARY : TEXT_SECONDARY;
         if (i == 2 && focus != i)
             col = DANGER;

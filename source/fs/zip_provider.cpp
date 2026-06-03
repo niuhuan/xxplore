@@ -25,16 +25,30 @@ constexpr std::size_t kNormalZipMaxNodes = 65536;
 constexpr std::size_t kNormalZipMaxPathBytes = 8 * 1024 * 1024;
 constexpr std::size_t kZipSkipBufferSize = 64 * 1024;
 
+// Window size for the read-ahead buffer placed in front of the backing
+// provider. minizip issues many tiny (16KB) reads/seeks while inflating an
+// entry and while scanning the end-of-central-directory; without buffering,
+// each one becomes a full round-trip (and, on FTP, a fresh login/RETR). A
+// large window collapses those into a few big sequential reads.
+constexpr std::size_t kZipBackingWindowApplet = 512 * 1024;
+constexpr std::size_t kZipBackingWindowNormal = 4 * 1024 * 1024;
+
 struct ArchiveSource {
     ProviderManager* provMgr = nullptr;
     std::string outerPath;
     uint64_t size = 0;
+    bool appletMode = false;
 };
 
 struct ArchiveReadStream {
     ArchiveSource* source = nullptr;
     uint64_t offset = 0;
     int error = 0;
+
+    // Read-ahead window covering [bufStart, bufStart + buf.size()) of the file.
+    std::vector<unsigned char> buf;
+    uint64_t bufStart = 0;
+    bool bufValid = false;
 };
 
 class ScopedArchive {
@@ -179,22 +193,51 @@ uLong ZCALLBACK zipRead(voidpf opaque, voidpf streamPtr, void* buf, uLong size) 
     if (!stream || !stream->source || !stream->source->provMgr)
         return 0;
 
-    if (stream->offset >= stream->source->size)
+    ArchiveSource* source = stream->source;
+    if (stream->offset >= source->size)
         return 0;
 
     uLong toRead = size;
-    uint64_t remaining = stream->source->size - stream->offset;
+    uint64_t remaining = source->size - stream->offset;
     if (remaining < static_cast<uint64_t>(toRead))
         toRead = static_cast<uLong>(remaining);
 
-    std::string err;
-    if (!stream->source->provMgr->readFile(stream->source->outerPath, stream->offset, toRead, buf, err)) {
-        stream->error = 1;
-        return 0;
+    const std::size_t windowSize =
+        source->appletMode ? kZipBackingWindowApplet : kZipBackingWindowNormal;
+
+    auto* out = static_cast<unsigned char*>(buf);
+    uLong done = 0;
+    while (done < toRead) {
+        const bool inWindow = stream->bufValid && stream->offset >= stream->bufStart &&
+                              stream->offset < stream->bufStart + stream->buf.size();
+        if (!inWindow) {
+            // Refill the window starting at the current offset. Large reads that
+            // exceed the window are still served directly (loop iterations), but
+            // typical 16KB minizip reads are served entirely from the buffer.
+            uint64_t winStart = stream->offset;
+            std::size_t winSize = static_cast<std::size_t>(
+                std::min<uint64_t>(windowSize, source->size - winStart));
+            if (stream->buf.size() != winSize)
+                stream->buf.resize(winSize);
+            std::string err;
+            if (!source->provMgr->readFile(source->outerPath, winStart, winSize,
+                                           stream->buf.data(), err)) {
+                stream->error = 1;
+                return done;
+            }
+            stream->bufStart = winStart;
+            stream->bufValid = true;
+        }
+
+        std::size_t inBuf = static_cast<std::size_t>(stream->bufStart + stream->buf.size() -
+                                                     stream->offset);
+        std::size_t take = std::min<std::size_t>(toRead - done, inBuf);
+        std::memcpy(out + done, stream->buf.data() + (stream->offset - stream->bufStart), take);
+        stream->offset += take;
+        done += take;
     }
 
-    stream->offset += toRead;
-    return toRead;
+    return done;
 }
 
 uLong ZCALLBACK zipWrite(voidpf opaque, voidpf streamPtr, const void* buf, uLong size) {
@@ -594,6 +637,7 @@ private:
         archive.source->provMgr = provMgr_;
         archive.source->outerPath = outerPath_;
         archive.source->size = info.size;
+        archive.source->appletMode = appletMode_;
 
         zlib_filefunc64_def funcs {};
         funcs.zopen64_file = zipOpen64;

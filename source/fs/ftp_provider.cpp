@@ -785,7 +785,65 @@ public:
         return true;
     }
 
+    bool isOpen() const { return controlFd_ >= 0; }
+
+    // Read @p size bytes starting at @p offset over this (reused) control
+    // connection. The RETR streams to EOF, so for a partial read we close the
+    // data connection early and drain the trailing control response (226 on a
+    // complete transfer, 426 when aborted) so the control channel stays usable.
+    bool readPartial(const std::string& remotePath, uint64_t offset, void* outBuffer,
+                     size_t size, std::string& errOut) {
+        int dataFd = -1;
+        if (!openReadData(remotePath, offset, dataFd, errOut))
+            return false;
+
+        auto* ptr = static_cast<unsigned char*>(outBuffer);
+        size_t received = 0;
+        bool readOk = true;
+        while (received < size) {
+            int rc = ::recv(dataFd, ptr + received, size - received, 0);
+            if (rc < 0) {
+                if (errno == EINTR)
+                    continue;
+                errOut = std::strerror(errno);
+                readOk = false;
+                break;
+            }
+            if (rc == 0) {
+                errOut = "unexpected eof";
+                readOk = false;
+                break;
+            }
+            received += static_cast<size_t>(rc);
+        }
+
+        std::string endErr;
+        bool endOk = endDataTransfer(dataFd, endErr);
+        if (!readOk)
+            return false;
+        if (!endOk) {
+            errOut = endErr;
+            return false;
+        }
+        return true;
+    }
+
 private:
+    // Close the data connection and consume the trailing control response.
+    // Any well-formed reply (226 complete or 426 aborted) leaves the control
+    // channel ready for the next command; only a control read failure is fatal.
+    bool endDataTransfer(int& dataFd, std::string& errOut) {
+        if (dataFd >= 0) {
+            ::shutdown(dataFd, SHUT_RDWR);
+            ::close(dataFd);
+            dataFd = -1;
+        }
+        FtpResponse response;
+        if (!readResponse(controlFd_, controlPending_, response, errOut))
+            return false;
+        return true;
+    }
+
     std::string commandPath(const std::string& remotePath) const {
         std::string path = normalizeAbsolutePath(remotePath);
         std::string base = normalizeAbsolutePath(endpoint_.basePath);
@@ -1305,40 +1363,30 @@ bool FtpProvider::readFile(const std::string& path, uint64_t offset, size_t size
     if (!validateCommandArgument(remotePath, errOut))
         return false;
 
-    FtpSession session(endpoint, user_, pass_);
-    if (!session.open(errOut))
-        return false;
+    std::lock_guard<std::mutex> lock(readSessionMutex_);
 
-    int dataFd = -1;
-    if (!session.openReadData(remotePath, offset, dataFd, errOut))
-        return false;
+    // Two attempts: reuse the live control connection, and if anything goes wrong
+    // (stale/desynced session, dropped connection) drop it and reconnect once.
+    for (int attempt = 0; attempt < 2; ++attempt) {
+        auto* session = static_cast<FtpSession*>(readSession_.get());
+        if (!session || !session->isOpen()) {
+            auto fresh = std::make_shared<FtpSession>(endpoint, user_, pass_);
+            if (!fresh->open(errOut)) {
+                readSession_.reset();
+                return false;
+            }
+            readSession_ = std::move(fresh);
+            session = static_cast<FtpSession*>(readSession_.get());
+        }
 
-    auto* ptr = static_cast<unsigned char*>(outBuffer);
-    size_t received = 0;
-    while (received < size) {
-        int rc = ::recv(dataFd, ptr + received, size - received, 0);
-        if (rc < 0) {
-            if (errno == EINTR)
-                continue;
-            errOut = std::strerror(errno);
-            ::shutdown(dataFd, SHUT_RDWR);
-            ::close(dataFd);
-            session.close();
-            return false;
-        }
-        if (rc == 0) {
-            errOut = "unexpected eof";
-            ::close(dataFd);
-            session.close();
-            return false;
-        }
-        received += static_cast<size_t>(rc);
+        if (session->readPartial(remotePath, offset, outBuffer, size, errOut))
+            return true;
+
+        // The persistent connection may now be in an unknown state; drop it so the
+        // next attempt (or call) reconnects cleanly.
+        readSession_.reset();
     }
-
-    ::shutdown(dataFd, SHUT_RDWR);
-    ::close(dataFd);
-    session.close();
-    return true;
+    return false;
 }
 
 std::unique_ptr<SequentialFileReader>
