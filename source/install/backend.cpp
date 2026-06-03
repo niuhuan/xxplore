@@ -1498,8 +1498,16 @@ public:
 
     size_t chunkSize() const { return chunkSize_; }
 
+    // Optionally drive prefetch from a persistent sequential reader (e.g. a single
+    // SMB/FTP/WebDAV connection). When set, the prefetch worker streams in-order
+    // from this reader, overlapping network reads with NCA decode + NCM writes,
+    // and avoids per-chunk reconnects that positional readRange would incur.
+    void setSequentialReader(std::unique_ptr<InstallSequentialReader> seqReader) {
+        seqReader_ = std::move(seqReader);
+    }
+
     bool start(uint64_t startOffset, uint64_t totalBytes, std::string& errOut) {
-        if (!readFn_) {
+        if (!readFn_ && !seqReader_) {
             errOut = "Install data source unavailable";
             return false;
         }
@@ -1528,7 +1536,7 @@ public:
     }
 
     bool readNext(void* outBuffer, size_t size, std::string& errOut) {
-        if (!readFn_) {
+        if (!readFn_ && !seqReader_) {
             errOut = "Install data source unavailable";
             return false;
         }
@@ -1538,7 +1546,12 @@ public:
         }
 
         if (maxBlocks_ <= 1) {
-            bool ok = readFn_(startOffset_ + bytesConsumed_, size, outBuffer, errOut);
+            bool ok;
+            if (seqReader_) {
+                ok = seqReader_->read(outBuffer, size, errOut);
+            } else {
+                ok = readFn_(startOffset_ + bytesConsumed_, size, outBuffer, errOut);
+            }
             if (ok)
                 bytesConsumed_ += size;
             return ok;
@@ -1603,6 +1616,8 @@ private:
         std::string error;
     };
 
+    std::unique_ptr<InstallSequentialReader> seqReader_;
+
     void workerLoop() {
         for (;;) {
             if (isInstallAbortRequested()) {
@@ -1638,7 +1653,12 @@ private:
             Chunk chunk;
             chunk.data.resize(size);
             std::string err;
-            if (!readFn_(offset, size, chunk.data.data(), err)) {
+            // The worker schedules chunks strictly in offset order, so a
+            // sequential reader stays in sync. Only this thread touches it.
+            bool readOk = seqReader_
+                              ? seqReader_->read(chunk.data.data(), size, err)
+                              : readFn_(offset, size, chunk.data.data(), err);
+            if (!readOk) {
                 chunk.error = err.empty() ? "Install read failed" : err;
             }
 
@@ -1930,13 +1950,6 @@ public:
         NcaWriter writer(ncaId, placeholderId, contentStorage);
         u64 fileStart = GetDataOffset() + fileEntry->dataOffset;
         u64 fileOff = 0;
-        std::unique_ptr<InstallSequentialReader> seqReader;
-        if (sourceCallbacks_ && sourceCallbacks_->openSequentialRead) {
-            std::string openErr;
-            seqReader = sourceCallbacks_->openSequentialRead(item_, fileStart, ncaSize, openErr);
-            if (!seqReader)
-                XP_THROW(openErr.empty() ? "Remote sequential reader unavailable" : openErr);
-        }
         BufferedInstallReader reader(item_.path,
                                      [this](uint64_t offset, size_t size, void* outBuffer,
                                             std::string& errOut) {
@@ -1947,13 +1960,20 @@ public:
                                          return sourceCallbacks_->readRange(item_, offset, size,
                                                                             outBuffer, errOut);
                                      });
+        // Prefer a persistent sequential reader (single connection) driven by the
+        // prefetch worker, so network reads overlap NCA decode + NCM writes.
+        if (sourceCallbacks_ && sourceCallbacks_->openSequentialRead) {
+            std::string openErr;
+            auto seqReader = sourceCallbacks_->openSequentialRead(item_, fileStart, ncaSize, openErr);
+            if (!seqReader)
+                XP_THROW(openErr.empty() ? "Remote sequential reader unavailable" : openErr);
+            reader.setSequentialReader(std::move(seqReader));
+        }
         size_t readSize = reader.chunkSize();
         auto buffer = std::make_unique<u8[]>(readSize);
-        if (!seqReader) {
-            std::string readerErr;
-            if (!reader.start(fileStart, ncaSize, readerErr))
-                XP_THROW(readerErr);
-        }
+        std::string readerErr;
+        if (!reader.start(fileStart, ncaSize, readerErr))
+            XP_THROW(readerErr);
 
         beginContainerEntry(ncaFileName, ncaSize);
         while (fileOff < ncaSize) {
@@ -1962,9 +1982,7 @@ public:
             if (fileOff + chunk >= ncaSize)
                 chunk = static_cast<size_t>(ncaSize - fileOff);
             std::string err;
-            bool ok = seqReader ? seqReader->read(buffer.get(), chunk, err)
-                                : reader.readNext(buffer.get(), chunk, err);
-            if (!ok)
+            if (!reader.readNext(buffer.get(), chunk, err))
                 XP_THROW(err.empty() ? "Remote read failed" : err);
             writer.write(buffer.get(), chunk);
             fileOff += chunk;
@@ -2007,13 +2025,6 @@ public:
         NcaWriter writer(ncaId, placeholderId, contentStorage);
         u64 fileStart = GetDataOffset() + fileEntry->dataOffset;
         u64 fileOff = 0;
-        std::unique_ptr<InstallSequentialReader> seqReader;
-        if (sourceCallbacks_ && sourceCallbacks_->openSequentialRead) {
-            std::string openErr;
-            seqReader = sourceCallbacks_->openSequentialRead(item_, fileStart, ncaSize, openErr);
-            if (!seqReader)
-                XP_THROW(openErr.empty() ? "Remote sequential reader unavailable" : openErr);
-        }
         BufferedInstallReader reader(item_.path,
                                      [this](uint64_t offset, size_t size, void* outBuffer,
                                             std::string& errOut) {
@@ -2024,13 +2035,20 @@ public:
                                          return sourceCallbacks_->readRange(item_, offset, size,
                                                                             outBuffer, errOut);
                                      });
+        // Prefer a persistent sequential reader (single connection) driven by the
+        // prefetch worker, so network reads overlap NCA decode + NCM writes.
+        if (sourceCallbacks_ && sourceCallbacks_->openSequentialRead) {
+            std::string openErr;
+            auto seqReader = sourceCallbacks_->openSequentialRead(item_, fileStart, ncaSize, openErr);
+            if (!seqReader)
+                XP_THROW(openErr.empty() ? "Remote sequential reader unavailable" : openErr);
+            reader.setSequentialReader(std::move(seqReader));
+        }
         size_t readSize = reader.chunkSize();
         auto buffer = std::make_unique<u8[]>(readSize);
-        if (!seqReader) {
-            std::string readerErr;
-            if (!reader.start(fileStart, ncaSize, readerErr))
-                XP_THROW(readerErr);
-        }
+        std::string readerErr;
+        if (!reader.start(fileStart, ncaSize, readerErr))
+            XP_THROW(readerErr);
 
         beginContainerEntry(ncaFileName, ncaSize);
         while (fileOff < ncaSize) {
@@ -2039,9 +2057,7 @@ public:
             if (fileOff + chunk >= ncaSize)
                 chunk = static_cast<size_t>(ncaSize - fileOff);
             std::string err;
-            bool ok = seqReader ? seqReader->read(buffer.get(), chunk, err)
-                                : reader.readNext(buffer.get(), chunk, err);
-            if (!ok)
+            if (!reader.readNext(buffer.get(), chunk, err))
                 XP_THROW(err.empty() ? "Remote read failed" : err);
             writer.write(buffer.get(), chunk);
             fileOff += chunk;
