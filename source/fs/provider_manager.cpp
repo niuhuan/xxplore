@@ -10,13 +10,27 @@
 #include <mutex>
 #include <thread>
 
+#include <switch.h>
+
 namespace xxplore {
 namespace fs {
 
 namespace {
 
-constexpr size_t kTransferChunkSize = 128 * 1024;
-constexpr size_t kTransferBufferCount = 20;
+// In title-override (application) mode there is ~3GB of RAM, so we can afford
+// larger read-ahead buffers for higher throughput. Applet mode is memory
+// constrained, so we keep buffers small there.
+bool isAppletMode() {
+    return appletGetAppletType() == AppletType_LibraryApplet;
+}
+
+size_t transferChunkSize() {
+    return isAppletMode() ? (128 * 1024) : (1024 * 1024);
+}
+
+size_t transferBufferCount() {
+    return isAppletMode() ? 8 : 24;
+}
 
 std::string pathBaseName(const std::string& fullPath) {
     std::size_t slash = fullPath.find_last_of('/');
@@ -94,7 +108,9 @@ class BufferedFileReader {
 public:
     BufferedFileReader(FileProvider* srcProv, std::string srcRel, uint64_t totalBytes)
         : srcProv_(srcProv), srcRel_(std::move(srcRel)), totalBytes_(totalBytes) {
-        threaded_ = totalBytes_ > kTransferChunkSize && kTransferBufferCount > 1;
+        chunkSize_ = transferChunkSize();
+        bufferCount_ = transferBufferCount();
+        threaded_ = totalBytes_ > chunkSize_ && bufferCount_ > 1;
     }
 
     ~BufferedFileReader() { stop(); }
@@ -112,6 +128,16 @@ public:
         producerError_.clear();
         queue_.clear();
         directOffset_ = 0;
+
+        // Prefer a persistent sequential reader: providers like zip decode the
+        // stream in-order, so reopening + re-skipping for every chunk would be
+        // O(n^2). A single sequential reader keeps it O(n). For providers whose
+        // openSequentialRead is unavailable we transparently fall back to
+        // positional readFile() below.
+        std::string seqErr;
+        seqReader_ = srcProv_->openSequentialRead(srcRel_, 0, seqErr);
+        useSeqReader_ = static_cast<bool>(seqReader_);
+
         if (!threaded_)
             return true;
         worker_ = std::thread([this]() { workerLoop(); });
@@ -120,7 +146,12 @@ public:
 
     bool readNext(void* outBuffer, size_t size, std::string& errOut) {
         if (!threaded_) {
-            bool ok = srcProv_->readFile(srcRel_, directOffset_, size, outBuffer, errOut);
+            bool ok;
+            if (useSeqReader_) {
+                ok = seqReader_->read(outBuffer, size, errOut);
+            } else {
+                ok = srcProv_->readFile(srcRel_, directOffset_, size, outBuffer, errOut);
+            }
             if (ok)
                 directOffset_ += size;
             return ok;
@@ -173,6 +204,9 @@ public:
         }
         if (worker_.joinable())
             worker_.join();
+        // Safe to release now that the worker (sole user in threaded mode) joined.
+        seqReader_.reset();
+        useSeqReader_ = false;
     }
 
 private:
@@ -189,7 +223,7 @@ private:
             {
                 std::unique_lock<std::mutex> lock(mutex_);
                 cvNotFull_.wait(lock, [this]() {
-                    return stopRequested_ || queue_.size() < kTransferBufferCount;
+                    return stopRequested_ || queue_.size() < bufferCount_;
                 });
                 if (stopRequested_)
                     break;
@@ -201,7 +235,7 @@ private:
 
                 offset = nextOffset_;
                 uint64_t remaining = totalBytes_ - bytesScheduled_;
-                size = static_cast<size_t>(std::min<uint64_t>(remaining, kTransferChunkSize));
+                size = static_cast<size_t>(std::min<uint64_t>(remaining, chunkSize_));
                 nextOffset_ += size;
                 bytesScheduled_ += size;
             }
@@ -209,7 +243,12 @@ private:
             Chunk chunk;
             chunk.data.resize(size);
             std::string err;
-            if (!srcProv_->readFile(srcRel_, offset, size, chunk.data.data(), err))
+            // The worker schedules chunks strictly in offset order, so the
+            // sequential reader stays in sync. Only this thread touches it.
+            bool readOk = useSeqReader_
+                              ? seqReader_->read(chunk.data.data(), size, err)
+                              : srcProv_->readFile(srcRel_, offset, size, chunk.data.data(), err);
+            if (!readOk)
                 chunk.error = err.empty() ? "read failed" : err;
 
             {
@@ -230,6 +269,10 @@ private:
     std::string srcRel_;
     uint64_t totalBytes_ = 0;
     bool threaded_ = false;
+    size_t chunkSize_ = 128 * 1024;
+    size_t bufferCount_ = 20;
+    std::unique_ptr<SequentialFileReader> seqReader_;
+    bool useSeqReader_ = false;
     uint64_t directOffset_ = 0;
 
     uint64_t nextOffset_ = 0;
@@ -364,7 +407,7 @@ bool copyFileBuffered(ProviderManager& provMgr, FileProvider* srcProv, const std
             result.lastError = err;
             return false;
         }
-        std::vector<char> buf(kTransferChunkSize);
+        std::vector<char> buf(transferChunkSize());
         uint64_t offset = 0;
         while (offset < fileSize) {
             size_t chunk = static_cast<size_t>(
