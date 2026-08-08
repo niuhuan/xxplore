@@ -49,6 +49,7 @@ git clone https://github.com/sahlberg/libsmb2.git
 cd libsmb2
 
 # 为 Switch 编译并安装
+make -f Makefile.platform switch_all
 sudo make -f Makefile.platform switch_install
 ```
 
@@ -113,7 +114,8 @@ dkp-pacman -S switch-ntfs-3g switch-lwext4
 
 git clone https://github.com/DarkMatterCore/libusbhsfs.git
 cd libusbhsfs
-make BUILD_TYPE=GPL install
+make BUILD_TYPE=GPL
+sudo DEVKITPRO=$DEVKITPRO make BUILD_TYPE=GPL install
 ```
 
 如果你按 Xxplore 当前方案使用，请安装已经去掉日志输出的静默 `libusbhsfsd.a`，而不是直接使用上游自带日志的 debug 版。

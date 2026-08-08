@@ -86,6 +86,7 @@ git clone https://github.com/sahlberg/libsmb2.git
 cd libsmb2
 
 # Build and install for Switch
+make -f Makefile.platform switch_all
 sudo make -f Makefile.platform switch_install
 ```
 
